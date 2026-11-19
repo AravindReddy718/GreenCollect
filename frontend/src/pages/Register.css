@@ -624,14 +624,7 @@
   }
 }
 
-/* Form Validation Styles */
-.form-input:invalid:not(:focus):not(:placeholder-shown) {
-  border-color: #ff6b6b;
-}
-
-.form-input:valid:not(:focus):not(:placeholder-shown) {
-  border-color: #ffcc00;
-}
+/* Form validation styles live in index.css (.input-invalid, .field-error, .field-hint) */
 
 .error-message {
   color: #ff6b6b;

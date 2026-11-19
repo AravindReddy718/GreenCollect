@@ -12,7 +12,17 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 const { authMiddleware } = require('../middleware/auth');
 
-const { EMAIL_RE } = require('../utils/validation');
+const {
+  isValidEmail,
+  normalizePhone,
+  PHONE_MESSAGE,
+  normalizeName,
+  isValidName,
+  NAME_MESSAGE,
+  passwordError,
+  VEHICLE_TYPES,
+  normalizeVehicleNumber
+} = require('../utils/validation');
 const { validationMessage } = require('../utils/sendError');
 
 // Failed-login limit: 10 wrong attempts per IP + email in 15 minutes, then 429
@@ -56,54 +66,60 @@ router.post('/register', async (req, res) => {
   try {
     const { name, password, role, collectorInfo, phone } = req.body;
     const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-
-    if (typeof name !== 'string' || !email || typeof password !== 'string' || !password || !role) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'name, email, password and role are required' 
-      });
-    }
+    // Every error names the field, so the form can show it next to the right input
+    const fail = (field, error) => res.status(400).json({ success: false, field, error });
 
     // Admin accounts are created only with `npm run create-admin`
     if (!['user', 'collector'].includes(role)) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'role must be user or collector' 
-      });
+      return fail('role', 'Please choose Community Member or Eco Collector');
+    }
+    if (!isValidName(name)) return fail('name', NAME_MESSAGE);
+    if (!isValidEmail(email)) return fail('email', 'Please enter a valid email address');
+    const invalidPassword = passwordError(password);
+    if (invalidPassword) return fail('password', invalidPassword);
+
+    // Optional phone for community members
+    let userPhone = '';
+    if (phone !== undefined && phone !== null && phone !== '') {
+      userPhone = normalizePhone(phone);
+      if (!userPhone) return fail('phone', PHONE_MESSAGE);
     }
 
-    if (email.length > 254 || !EMAIL_RE.test(email)) {
-      return res.status(400).json({ success: false, error: 'Please enter a valid email address' });
-    }
-
-    const trimmedName = name.trim();
-    if (trimmedName.length < 2 || trimmedName.length > 50) {
-      return res.status(400).json({ success: false, error: 'Name must be 2-50 characters' });
-    }
-
-    // bcrypt ignores bytes after 72, so cap there
-    if (password.length < 8 || password.length > 72) {
-      return res.status(400).json({ success: false, error: 'Password must be 8-72 characters' });
-    }
-
-    // If collector, ensure required collector fields exist
+    // Collectors must give valid contact and vehicle details
+    let collectorData = null;
     if (role === 'collector') {
-      const required = ['phone', 'address', 'vehicleType', 'vehicleNumberPlate'];
-      const missing = required.filter(f => !collectorInfo || !collectorInfo[f]);
-      if (missing.length) {
-        return res.status(400).json({ 
-          success: false,
-          error: `collectorInfo missing fields: ${missing.join(', ')}` 
-        });
+      const info = collectorInfo && typeof collectorInfo === 'object' ? collectorInfo : {};
+      const collectorPhone = normalizePhone(info.phone);
+      if (!collectorPhone) return fail('phone', PHONE_MESSAGE);
+      const address = typeof info.address === 'string' ? info.address.trim() : '';
+      if (address.length < 5 || address.length > 200 || !/\p{L}/u.test(address)) {
+        return fail('address', 'Address must be 5-200 characters and include letters');
       }
+      if (!VEHICLE_TYPES.includes(info.vehicleType)) return fail('vehicleType', 'Please choose a vehicle type');
+      const plate = normalizeVehicleNumber(info.vehicleNumberPlate);
+      if (!plate) return fail('vehicleNumberPlate', 'Enter a valid vehicle number, e.g. KA01AB1234');
+      const experience = typeof info.experience === 'string' ? info.experience.trim() : '';
+      if (experience.length < 2 || experience.length > 500) {
+        return fail('experience', 'Experience must be 2-500 characters');
+      }
+      collectorData = {
+        phone: collectorPhone,
+        address,
+        vehicleType: info.vehicleType,
+        vehicleNumberPlate: plate,
+        experience,
+        isApproved: false,
+        status: 'pending'
+      };
     }
 
     // Check existing email
     const existing = await User.findOne({ email });
     if (existing) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         success: false,
-        error: 'Email already in use' 
+        field: 'email',
+        error: 'Email already in use'
       });
     }
 
@@ -111,26 +127,18 @@ router.post('/register', async (req, res) => {
     const hashed = await bcrypt.hash(password, SALT_ROUNDS);
 
     const userData = {
-      name: trimmedName,
+      name: normalizeName(name),
       email,
       password: hashed,
       role,
-      phone: phone || '',
+      phone: userPhone,
       points: 0, // NEW USERS START WITH 0 COINS
       memberSince: new Date()
     };
 
-    // ✅ If role is collector, mark as unapproved initially
-    if (role === 'collector') {
-      userData.collectorInfo = {
-        phone: collectorInfo.phone,
-        address: collectorInfo.address,
-        vehicleType: collectorInfo.vehicleType,
-        vehicleNumberPlate: collectorInfo.vehicleNumberPlate,
-        experience: collectorInfo.experience || '',
-        isApproved: false, // 🔥 Key line
-        status: 'pending'  // 🔥 For admin UI clarity
-      };
+    // Collectors start unapproved; an admin reviews them
+    if (collectorData) {
+      userData.collectorInfo = collectorData;
     }
 
     const user = new User(userData);
@@ -172,7 +180,7 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ success: false, error: invalid });
     }
     if (err.code === 11000) {
-      return res.status(409).json({ success: false, error: 'Email already in use' });
+      return res.status(409).json({ success: false, field: 'email', error: 'Email already in use' });
     }
     console.error('Register error:', err);
     return res.status(500).json({ 
@@ -191,10 +199,13 @@ router.post('/login', async (req, res) => {
     const { password } = req.body;
     const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
     if (!email || typeof password !== 'string' || !password) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        error: 'Email and password required' 
+        error: 'Email and password required'
       });
+    }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ success: false, field: 'email', error: 'Please enter a valid email address' });
     }
 
     const limitKey = `${req.ip}|${email}`;
@@ -345,12 +356,13 @@ router.put('/profile', authMiddleware, async (req, res) => {
 
     // Update fields
     if (name !== undefined) {
-      if (typeof name !== 'string') return res.status(400).json({ success: false, message: 'Name must be text' });
-      user.name = name;
+      if (!isValidName(name)) return res.status(400).json({ success: false, field: 'name', message: NAME_MESSAGE });
+      user.name = normalizeName(name);
     }
     if (phone !== undefined && phone !== '') {
-      if (typeof phone !== 'string') return res.status(400).json({ success: false, message: 'Phone must be text' });
-      user.phone = phone;
+      const normalizedPhone = normalizePhone(phone);
+      if (!normalizedPhone) return res.status(400).json({ success: false, field: 'phone', message: PHONE_MESSAGE });
+      user.phone = normalizedPhone;
     }
     if (avatar !== undefined && avatar !== '') {
       if (typeof avatar !== 'string' || avatar.length > 500 || !/^https?:\/\//i.test(avatar.trim())) {

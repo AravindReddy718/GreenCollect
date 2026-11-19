@@ -7,7 +7,7 @@ const User = require('../models/Users');
 const Product = require('../models/Products');
 const { authMiddleware } = require('../middleware/auth');
 const { sendError } = require('../utils/sendError');
-const { isValidEmail } = require('../utils/validation');
+const { isValidEmail, normalizePhone } = require('../utils/validation');
 
 const ADDRESS_FIELDS = ['fullName', 'phone', 'address', 'city', 'state', 'pincode'];
 
@@ -16,8 +16,8 @@ function addressError(address) {
   if (!address || ADDRESS_FIELDS.some(f => typeof address[f] !== 'string' || !address[f].trim())) {
     return 'All required delivery address fields must be provided';
   }
-  if (!/^\+?\d{10,13}$/.test(address.phone.replace(/[\s()-]/g, ''))) {
-    return 'Enter a valid phone number (10-13 digits)';
+  if (!normalizePhone(address.phone)) {
+    return 'Enter a valid phone number (10-digit mobile, e.g. 9876543210)';
   }
   if (!/^\d{6}$/.test(address.pincode.trim())) {
     return 'Enter a valid 6-digit pincode';
@@ -140,8 +140,8 @@ router.post('/', authMiddleware, async (req, res) => {
       deliveryCost,
       address: {
         fullName: address.fullName.trim(),
-        phone: address.phone.trim(),
-        email: address.email || user.email,
+        phone: normalizePhone(address.phone),
+        email: address.email ? address.email.trim().toLowerCase() : user.email,
         address: address.address.trim(),
         city: address.city.trim(),
         state: address.state.trim(),

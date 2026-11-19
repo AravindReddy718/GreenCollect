@@ -192,3 +192,21 @@ body {
 /* Include your rolling logo animation, smaller service cards, responsive styles, etc. */
 
 /* ... Paste your entire Home.css here ... */
+
+/* Inline form validation (login, register) */
+.form-input.input-invalid,
+.form-input.input-invalid:focus {
+  border-color: #ff6b6b;
+}
+
+.field-error {
+  color: #ff6b6b;
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+}
+
+.field-hint {
+  color: #9a9a9a;
+  font-size: 0.8rem;
+  margin: 0.4rem 0 0;
+}

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { FaCoins, FaArrowLeft, FaMapMarkerAlt, FaTruck, FaCheck, FaShoppingCart } from 'react-icons/fa';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
+import { normalizePhone } from '../utils/validation';
 import api, { getErrorMessage } from '../services/api';
 import './RedeemCheckout.css';
 
@@ -113,7 +114,7 @@ const RedeemCheckout: React.FC = () => {
 
   const validateAddress = () =>
     address.fullName.trim().length >= 2 &&
-    /^\+?\d{10,13}$/.test(address.phone.replace(/[\s()-]/g, '')) &&
+    normalizePhone(address.phone) !== null &&
     address.address.trim().length >= 5 &&
     address.city.trim().length >= 2 &&
     address.state.trim().length >= 2 &&
@@ -230,7 +231,7 @@ const RedeemCheckout: React.FC = () => {
             type="tel"
             value={address.phone}
             onChange={(e) => setAddress({ ...address, phone: e.target.value })}
-            placeholder="10-digit phone number"
+            placeholder="10-digit mobile, e.g. 9876543210"
             required
           />
         </div>

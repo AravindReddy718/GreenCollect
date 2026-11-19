@@ -131,7 +131,7 @@ const runAllTests = async () => {
     const adminToken = adminLogin.data?.token;
     const adminHeaders = { Authorization: `Bearer ${adminToken}` };
     const testUser = {
-      name: `Tester ${timestamp}`,
+      name: 'Tester Alpha',
       email: `test_${timestamp}@example.com`,
       password: 'Password123!',
       role: 'user',
@@ -216,7 +216,7 @@ const runAllTests = async () => {
     // 10. Collector Registration & Admin Approval Workflow
     console.log('\n--- TEST 10: Collector Registration & Admin Approval ---');
     const testCollector = {
-      name: `Collector ${timestamp}`,
+      name: 'Collector Bravo',
       email: `collector_${timestamp}@example.com`,
       password: 'Password123!',
       role: 'collector',
@@ -685,6 +685,66 @@ const runAllTests = async () => {
     // [Re-audit P2-10] create-admin refuses to run with default credentials
     const noArgsAdmin = spawnSync(process.execPath, ['createAdmin.js'], { cwd: __dirname, env: { ...process.env, MONGO_URI: activeUri }, encoding: 'utf8' });
     assert(noArgsAdmin.status === 1 && /Usage/.test(noArgsAdmin.stderr), '[Re-audit P2-10] create-admin without arguments prints usage and exits');
+
+    // ================= SIGN-UP / LOGIN FIELD VALIDATION =================
+    console.log('\n--- TEST 20: Sign-up and login field validation ---');
+    let seq = 0;
+    const freshEmail = () => `field_${timestamp}_${++seq}@example.com`;
+    const signup = (overrides) => request('/api/auth/register', { method: 'POST', body: { name: 'Valid Name', email: freshEmail(), password: 'Password123!', role: 'user', ...overrides } });
+    const collectorSignup = (info) => request('/api/auth/register', { method: 'POST', body: { name: 'Field Collector', email: freshEmail(), password: 'Password123!', role: 'collector', collectorInfo: { phone: '9876543210', address: '12 Recycle Road, Bengaluru', vehicleType: 'Truck', vehicleNumberPlate: 'KA01AB1234', experience: '2 years', ...info } } });
+    const expectField = async (label, promise, field) => {
+      const r = await promise;
+      assert(r.status === 400 && r.data?.field === field, `[Field] ${label} -> ${r.status} field=${r.data?.field} "${r.data?.error}"`);
+    };
+
+    // Phone: only real 10-digit mobile numbers
+    for (const bad of ['-----', '((((', '1', '0000000000', '12', '5876543210', '98765432101', '123456789012345678901234567890', 'abcdefghij']) {
+      await expectField(`Phone ${JSON.stringify(bad)} rejected (sign-up)`, signup({ phone: bad }), 'phone');
+      await expectField(`Phone ${JSON.stringify(bad)} rejected (collector)`, collectorSignup({ phone: bad }), 'phone');
+    }
+    const goodPhone = await collectorSignup({ phone: '+91 98765 43210' });
+    const goodPhoneDoc = await db.collection('users').findOne({ _id: new mongoose.Types.ObjectId(goodPhone.data?.collectorId) });
+    assert(goodPhone.status === 201 && goodPhoneDoc?.collectorInfo?.phone === '9876543210', `[Field] "+91 98765 43210" accepted and stored as ${goodPhoneDoc?.collectorInfo?.phone}`);
+
+    // Email: tightened format
+    for (const bad of ['<script>@x.com', 'a..b@gmail.com', '.abc@gmail.com', 'abc.@gmail.com', 'a"b(c)@x.com', 'user@-gmail.com', 'user@gmail-.com', 'user@xn--.com', '\u202Eabc@x.com', 'a@b', 'plainaddress', 'a b@x.com']) {
+      await expectField(`Email ${JSON.stringify(bad)} rejected (sign-up)`, signup({ email: bad }), 'email');
+    }
+    const loginBadEmail = await request('/api/auth/login', { method: 'POST', body: { email: '<script>@x.com', password: 'Password123!' } });
+    assert(loginBadEmail.status === 400 && loginBadEmail.data?.field === 'email', `[Field] Login with malformed email -> ${loginBadEmail.status}`);
+    const okEmail = await signup({ email: `John.Doe_99+eco_${timestamp}@College.AC.IN` });
+    const okEmailDoc = await db.collection('users').findOne({ email: `john.doe_99+eco_${timestamp}@college.ac.in` });
+    assert(okEmail.status === 201 && okEmailDoc, '[Field] Valid email "John.Doe_99+eco@College.AC.IN" accepted and stored in lower case');
+
+    // Name: letters only (any language)
+    for (const bad of ['12345', '<script>', '!!!!', 'R2D2', 'a', '-Ravi']) {
+      await expectField(`Name ${JSON.stringify(bad)} rejected`, signup({ name: bad }), 'name');
+    }
+    const telugu = await signup({ name: 'రాము   కుమార్' });
+    const teluguDoc = await db.collection('users').findOne({ email: `field_${timestamp}_${seq}@example.com` });
+    assert(telugu.status === 201 && teluguDoc?.name === 'రాము కుమార్', `[Field] Telugu name accepted, extra spaces collapsed: "${teluguDoc?.name}"`);
+
+    // Password: needs a letter and a number
+    for (const bad of ['aaaaaaaa', '12345678', '        ', 'Pass1']) {
+      await expectField(`Password ${JSON.stringify(bad)} rejected`, signup({ password: bad }), 'password');
+    }
+
+    // Collector details
+    await expectField('Vehicle number "XYZ" rejected', collectorSignup({ vehicleNumberPlate: 'XYZ' }), 'vehicleNumberPlate');
+    await expectField('Vehicle number "1234" rejected', collectorSignup({ vehicleNumberPlate: '1234' }), 'vehicleNumberPlate');
+    await expectField('Vehicle type "Rocket" rejected', collectorSignup({ vehicleType: 'Rocket' }), 'vehicleType');
+    await expectField('Address "   " rejected', collectorSignup({ address: '   ' }), 'address');
+    await expectField('Address "12345" (no letters) rejected', collectorSignup({ address: '12345' }), 'address');
+    await expectField('Experience "   " rejected', collectorSignup({ experience: '   ' }), 'experience');
+    const plateOk = await collectorSignup({ vehicleNumberPlate: 'ka 01 ab 9876' });
+    const plateDoc = await db.collection('users').findOne({ _id: new mongoose.Types.ObjectId(plateOk.data?.collectorId) });
+    assert(plateOk.status === 201 && plateDoc?.collectorInfo?.vehicleNumberPlate === 'KA01AB9876', `[Field] Vehicle "ka 01 ab 9876" stored as ${plateDoc?.collectorInfo?.vehicleNumberPlate}`);
+
+    // Same phone rule on profile, checkout and organisation forms
+    const profilePhone = await request('/api/auth/profile', { method: 'PUT', headers: authHeader(userToken), body: { phone: '-----' } });
+    assert(profilePhone.status === 400, `[Field] Profile phone "-----" -> ${profilePhone.status}`);
+    const orgPhone = await request('/api/waste-requests/organisation', { method: 'POST', body: { ...orgPayload, contactPhone: '((((' } });
+    assert(orgPhone.status === 400, `[Field] Organisation phone "((((" -> ${orgPhone.status}`);
 
     // Admin overview numbers come from the database, not hardcoded values
     const statsAsUser = await request('/api/admin/stats', { headers: authHeader(userToken) });

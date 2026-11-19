@@ -6,7 +6,7 @@ const User = require('../models/Users');
 const CollectorActivity = require('../models/CollectorActivity');
 const Notification = require('../models/Notification');
 const { sendError } = require('../utils/sendError');
-const { isValidEmail } = require('../utils/validation');
+const { isValidEmail, normalizePhone, PHONE_MESSAGE } = require('../utils/validation');
 
 // Validates a pickup date: must parse, must not be before today and must be within 90 days.
 // Returns an error message or null.
@@ -323,6 +323,11 @@ router.post('/organisation', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please enter a valid contact email' });
     }
 
+    const organisationPhone = contactPhone ? normalizePhone(contactPhone) : null;
+    if (contactPhone && !organisationPhone) {
+      return res.status(400).json({ success: false, message: PHONE_MESSAGE });
+    }
+
     const weight = parseFloat(estimatedWeight) || 0;
     if (weight < 0 || weight > MAX_ORGANISATION_WEIGHT_KG) {
       return res.status(400).json({ success: false, message: `Estimated weight must be 0-${MAX_ORGANISATION_WEIGHT_KG} kg` });
@@ -341,8 +346,8 @@ router.post('/organisation', async (req, res) => {
       organisationName,
       organisationType,
       organisationContactName: contactName,
-      contactEmail,
-      organisationContactPhone: contactPhone,
+      contactEmail: contactEmail ? contactEmail.trim().toLowerCase() : undefined,
+      organisationContactPhone: organisationPhone || undefined,
       pickupAddress,
       wasteTypes: normalizedWasteTypes,
       wasteType: primaryType,

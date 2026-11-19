@@ -1,4 +1,11 @@
 const mongoose = require('mongoose');
+const { isValidEmail, isValidName, normalizePhone, normalizeVehicleNumber, PHONE_MESSAGE, NAME_MESSAGE } = require('../utils/validation');
+
+// Phones are stored as the bare 10-digit mobile number (routes normalise before saving)
+const phoneValidator = {
+  validator: (v) => v == null || v === '' || normalizePhone(v) === v,
+  message: PHONE_MESSAGE
+};
 
 const collectorInfoSchema = new mongoose.Schema({
   phone: { 
@@ -6,7 +13,7 @@ const collectorInfoSchema = new mongoose.Schema({
     required: function() {
       return this.parent && typeof this.parent === 'function' && this.parent() ? this.parent().role === 'collector' : false;
     },
-    match: [/^\+?[\d\s-()]+$/, 'Please enter a valid phone number']
+    validate: phoneValidator
   },
   address: { 
     type: String, 
@@ -28,7 +35,11 @@ const collectorInfoSchema = new mongoose.Schema({
       return this.parent && typeof this.parent === 'function' && this.parent() ? this.parent().role === 'collector' : false;
     },
     uppercase: true,
-    trim: true
+    trim: true,
+    validate: {
+      validator: (v) => v == null || v === '' || normalizeVehicleNumber(v) === v,
+      message: 'Enter a valid vehicle number, e.g. KA01AB1234'
+    }
   },
   experience: { 
     type: String, 
@@ -57,7 +68,8 @@ const userSchema = new mongoose.Schema({
     type: String, 
     required: [true, 'Name is required'],
     trim: true,
-    maxlength: [50, 'Name cannot exceed 50 characters']
+    maxlength: [50, 'Name cannot exceed 50 characters'],
+    validate: { validator: isValidName, message: NAME_MESSAGE }
   },
   email: { 
     type: String, 
@@ -66,7 +78,7 @@ const userSchema = new mongoose.Schema({
     lowercase: true,
     trim: true,
     maxlength: [254, 'Email too long'],
-    match: [/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)*\.[A-Za-z]{2,}$/, 'Please enter a valid email']
+    validate: { validator: isValidEmail, message: 'Please enter a valid email address' }
   },
   password: { 
     type: String, 
@@ -75,7 +87,7 @@ const userSchema = new mongoose.Schema({
   },
   phone: {
     type: String,
-    match: [/^\+?[\d\s-()]+$/, 'Please enter a valid phone number']
+    validate: phoneValidator
   },
   role: { 
     type: String, 

@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import api, { getErrorMessage } from '../services/api';
 import { FaEnvelope, FaLock, FaEye, FaEyeSlash, FaArrowRight, FaRecycle, FaLeaf, FaUsers } from 'react-icons/fa';
 import { useAuth } from '../contexts/AuthContext';
+import { isValidEmail } from '../utils/validation';
 import './Login.css';
 
 const Login = ({ onLogin }: { onLogin?: () => void }) => {
@@ -13,6 +14,16 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
   const [rememberMe, setRememberMe] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [touched, setTouched] = useState<{ email?: boolean; password?: boolean }>({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  // Same email rule as sign-up and the server
+  const fieldErrors: { email?: string; password?: string } = {};
+  if (!isValidEmail(email)) {
+    fieldErrors.email = email.trim() ? 'Please enter a valid email address (e.g. name@example.com)' : 'Please enter your email address';
+  }
+  if (!password) fieldErrors.password = 'Please enter your password';
+  const errorFor = (field: 'email' | 'password') => (touched[field] || submitAttempted ? fieldErrors[field] : undefined);
   
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -20,13 +31,18 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setSubmitAttempted(true);
+    if (fieldErrors.email || fieldErrors.password) {
+      document.getElementById(fieldErrors.email ? 'email' : 'password')?.focus();
+      return;
+    }
     setLoading(true);
 
     try {
       
-      const res = await api.post('/api/auth/login', { 
-        email, 
-        password 
+      const res = await api.post('/api/auth/login', {
+        email: email.trim(),
+        password
       });
       
       
@@ -44,7 +60,7 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
   navigate('/dashboard');
       
     } catch (err) {
-      console.error('Login error details:', err);
+      // Shown on the page; no console noise for expected errors such as a wrong password
       setErrorMessage(getErrorMessage(err, 'Login failed. Please try again.'));
     } finally {
       setLoading(false);
@@ -87,7 +103,7 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
               <p>Sign in to your Janatha Garage account</p>
             </div>
 
-            <form onSubmit={handleLogin} className="login-form">
+            <form onSubmit={handleLogin} className="login-form" noValidate>
               <div className="form-group">
                 <label htmlFor="email" className="form-label">
                   <FaEnvelope className="input-icon" /> Email Address
@@ -95,13 +111,21 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
                 <input
                   type="email"
                   id="email"
+                  name="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  className="form-input"
-                  placeholder="Enter your email"
+                  onBlur={() => setTouched(prev => ({ ...prev, email: true }))}
+                  className={`form-input${errorFor('email') ? ' input-invalid' : ''}`}
+                  placeholder="name@example.com"
+                  autoComplete="email"
+                  inputMode="email"
+                  maxLength={254}
+                  aria-invalid={Boolean(errorFor('email'))}
+                  aria-describedby={errorFor('email') ? 'email-error' : undefined}
                   required
                   disabled={loading}
                 />
+                {errorFor('email') && <p id="email-error" className="field-error" role="alert">{errorFor('email')}</p>}
               </div>
 
               <div className="form-group">
@@ -112,22 +136,30 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
                   <input
                     type={showPassword ? "text" : "password"}
                     id="password"
+                    name="password"
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    className="form-input password-input"
+                    onBlur={() => setTouched(prev => ({ ...prev, password: true }))}
+                    className={`form-input password-input${errorFor('password') ? ' input-invalid' : ''}`}
                     placeholder="Enter your password"
+                    autoComplete="current-password"
+                    maxLength={72}
+                    aria-invalid={Boolean(errorFor('password'))}
+                    aria-describedby={errorFor('password') ? 'password-error' : undefined}
                     required
                     disabled={loading}
                   />
                   <button 
                     type="button" 
-                    className="password-toggle" 
+                    className="password-toggle"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'} 
                     onClick={togglePasswordVisibility}
                     disabled={loading}
                   >
                     {showPassword ? <FaEyeSlash /> : <FaEye />}
                   </button>
                 </div>
+                {errorFor('password') && <p id="password-error" className="field-error" role="alert">{errorFor('password')}</p>}
               </div>
 
               <div className="form-options">
@@ -141,9 +173,6 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
                   <span className="checkmark"></span>
                   Remember me
                 </label>
-                <Link to="/forgot-password" className="forgot-password">
-                  Forgot Password?
-                </Link>
               </div>
 
               {errorMessage && (
