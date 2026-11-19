@@ -7,7 +7,24 @@
 //   - production (NODE_ENV=production): nothing is printed and an error is logged.
 const nodemailer = require('nodemailer');
 
-const isConfigured = () => Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+// The example values from the README/.env.example count as "not configured"
+const PLACEHOLDERS = new Set(['you@gmail.com', 'your-app-password', 'your_smtp_user', 'your_smtp_password']);
+const isConfigured = () => {
+  const { SMTP_HOST, SMTP_USER, SMTP_PASS } = process.env;
+  return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && !PLACEHOLDERS.has(SMTP_USER) && !PLACEHOLDERS.has(SMTP_PASS));
+};
+
+const printEmail = (to, subject, text) =>
+  console.log(`\n[dev email] Here is the email instead:\nTo: ${to}\nSubject: ${subject}\n${text}\n`);
+
+// A clear next step for the most common SMTP problems
+const smtpHint = (err) => {
+  if (err && err.code === 'EAUTH') {
+    return 'The SMTP login was rejected. For Gmail, turn on 2-Step Verification and use a 16-character App Password '
+      + '(your normal Gmail password will not work). Or remove the SMTP_* lines from backend/.env to print reset links in this terminal instead.';
+  }
+  return 'Check SMTP_HOST, SMTP_PORT, SMTP_USER and SMTP_PASS in backend/.env.';
+};
 
 let transporter = null;
 const getTransporter = () => {
@@ -39,16 +56,27 @@ async function sendMail({ to, subject, text, html }) {
       console.error(`Email to ${to} not sent: SMTP is not configured (set SMTP_HOST, SMTP_USER, SMTP_PASS).`);
       return;
     }
-    console.log(`\n[dev email] SMTP not configured, so here is the email instead:\nTo: ${to}\nSubject: ${subject}\n${text}\n`);
+    console.log('\n[dev email] SMTP is not configured (or still has the example values).');
+    printEmail(to, subject, text);
     return;
   }
-  await getTransporter().sendMail({
-    from: process.env.MAIL_FROM || process.env.SMTP_USER,
-    to,
-    subject,
-    text,
-    html
-  });
+  try {
+    await getTransporter().sendMail({
+      from: process.env.MAIL_FROM || process.env.SMTP_USER,
+      to,
+      subject,
+      text,
+      html
+    });
+  } catch (err) {
+    const reason = String(err.message || err).split('\n')[0];
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(`${reason} ${smtpHint(err)}`);
+    }
+    // Development: explain the problem and still show the email, so testing is never blocked
+    console.error(`\n[dev email] Could not send email to ${to}: ${reason}\n${smtpHint(err)}`);
+    printEmail(to, subject, text);
+  }
 }
 
 module.exports = { sendMail, outbox };
