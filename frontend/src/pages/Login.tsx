@@ -1,7 +1,7 @@
 // src/pages/Login.tsx
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../services/api';
 import { FaEnvelope, FaLock, FaEye, FaEyeSlash, FaArrowRight, FaRecycle, FaLeaf, FaUsers } from 'react-icons/fa';
 import { useAuth } from '../contexts/AuthContext';
 import './Login.css';
@@ -25,7 +25,7 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
     try {
       console.log('Attempting login...', { email });
       
-      const res = await axios.post('https://greencollect.onrender.com/api/auth/login', { 
+      const res = await api.post('/api/auth/login', { 
         email, 
         password 
       });

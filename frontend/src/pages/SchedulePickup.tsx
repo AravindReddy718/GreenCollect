@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import './SchedulePickup.css';
+import { API_BASE_URL } from '../services/api';
 import { FaCalendar, FaTrash, FaMapMarkerAlt, FaCheckCircle, FaTimes, FaCoins, FaSpinner } from 'react-icons/fa';
 
 interface SchedulePickupProps {
   onClose: () => void;
   userId?: string; // Add userId prop
+  onPickupScheduled?: () => void | Promise<void>;
 }
 
-const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId }) => {
+const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId, onPickupScheduled }) => {
   const [formData, setFormData] = useState({
     pickupDate: '',
     wasteType: '',
@@ -87,7 +89,7 @@ const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId }) => {
 
       const token = localStorage.getItem('token') || sessionStorage.getItem('token');
       
-      const response = await fetch('https://greencollect.onrender.com/api/waste-requests', {
+      const response = await fetch(`${API_BASE_URL}/api/waste-requests`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,6 +109,14 @@ const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId }) => {
       // Show success message
       alert('✅ Pickup scheduled successfully! Our collector will contact you soon.');
       
+      if (onPickupScheduled) {
+        try {
+          await onPickupScheduled();
+        } catch (e) {
+          console.error('Error in onPickupScheduled callback:', e);
+        }
+      }
+
       // Close the modal
       onClose();
 

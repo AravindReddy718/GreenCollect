@@ -1,6 +1,7 @@
-import { useState,useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useCart } from '../contexts/CartContext';
-import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { API_BASE_URL } from '../services/api';
 import './SustainableProducts.css';
 import {
     FaLeaf,
@@ -31,21 +32,28 @@ interface Product {
     reviews: number;
 }
 
-const SustainableProducts: React.FC = () => {
+interface SustainableProductsProps {
+    userCoins?: number;
+}
+
+const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: propCoins }) => {
+    const { user } = useAuth();
     const [searchTerm, setSearchTerm] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('all');
-    const [userCoins] = useState(1250);
-    const [wishlist, setWishlist] = useState<String[]>([]);
+    const [wishlist, setWishlist] = useState<string[]>([]);
 
     const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const { addToCart } = useCart();
+
+    const userCoins = propCoins ?? user?.points ?? 0;
+
     useEffect(() => {
         const fetchProducts = async () => {
             console.log('Fetching products from backend...');
             try {
-                const response = await fetch('https://greencollect.onrender.com/api/products');
+                const response = await fetch(`${API_BASE_URL}/api/products`);
                 const data = await response.json();
     
                 if (!response.ok) throw new Error(data.message || 'Failed to fetch products');
@@ -143,6 +151,16 @@ const SustainableProducts: React.FC = () => {
 
     return (
         <div className="sustainable-products-page">
+            {loading && (
+                <div style={{ textAlign: 'center', padding: '2rem', color: '#ffcc00' }}>
+                    <p>Loading eco products...</p>
+                </div>
+            )}
+            {error && (
+                <div style={{ textAlign: 'center', padding: '1rem', color: '#ff5252', background: 'rgba(255,82,82,0.1)', borderRadius: '8px', margin: '1rem 0' }}>
+                    <p>{error}</p>
+                </div>
+            )}
            
 
             {/* Stats Cards */}

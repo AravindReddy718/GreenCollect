@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import './UserDashboard.css';
+import { API_BASE_URL } from '../services/api';
 import {
     FaTrash, FaTruck, FaCheckCircle,
     FaCalendar, FaMapMarkerAlt, FaChevronRight, FaSearch,
     FaListAlt, FaClock, FaCheck,
     FaTimesCircle, FaTruck as FaTruckIcon,
     FaTools, FaLeaf, FaCoins, FaChartLine,
-    FaBolt, FaShieldAlt, FaRocket, FaStar,
+    FaBolt, FaStar,
     FaSpinner, FaUser, FaEnvelope, FaTimes
 } from 'react-icons/fa';
 import {
@@ -19,6 +20,7 @@ import SustainableProducts from './SustainableProducts';
 interface UserDashboardProps {
     activeTab: string;
     onTabChange?: (tab: string) => void;
+    userId?: string;
 }
 
 interface PickupRequest {
@@ -120,7 +122,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                 return;
             }
 
-            const response = await fetch('https://greencollect.onrender.com/api/waste-requests/my-requests', {
+            const response = await fetch(`${API_BASE_URL}/api/waste-requests/my-requests`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
@@ -169,7 +171,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
             }
 
             console.log('🔄 Fetching leaderboard from backend...');
-            const response = await fetch('https://greencollect.onrender.com/api/users/leaderboard', {
+            const response = await fetch(`${API_BASE_URL}/api/users/leaderboard`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
@@ -583,7 +585,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                                 innerRadius={60}
                                 outerRadius={100}
                                 paddingAngle={2}
-                                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                label={({ name, percent }: any) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
                             >
                                 {chartData.wasteTypesData.map((entry, index) => (
                                     <Cell key={`cell-${index}`} fill={entry.color} />

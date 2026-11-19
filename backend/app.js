@@ -9,29 +9,49 @@ const companyRoutes = require('./routes/companyRoutes');
 
 const app = express();
 const httpServer = http.createServer(app);
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:3000',
+  'https://janatha-garage.onrender.com',
+  'https://greencollect.onrender.com'
+];
+
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps, curl, postman)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    return callback(new Error('Not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
 const io = new Server(httpServer, {
   cors: {
-    origin: ['https://janatha-garage.onrender.com','https://greencollect.onrender.com','http://localhost:5173', 'http://localhost:3000'],
+    origin: '*',
     methods: ['GET', 'POST']
   }
 });
 
 app.use(express.json());
-app.use(
-  cors({
-    origin: ['https://janatha-garage.onrender.com','https://greencollect.onrender.com','http://localhost:5173', 'http://localhost:3000'],
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    credentials: true,
-  })
-);
+app.use(cors(corsOptions));
 
 // Connect to MongoDB
 const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/janathagarage';
-mongoose.connect(MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-  .then(() => console.log('✅ MongoDB connected successfully'))
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('✅ MongoDB connected successfully to', mongoose.connection.name))
   .catch(err => {
     console.error('❌ MongoDB connection error:', err?.message || err);
     console.warn('Continuing to start server without database connection (dev mode).');
@@ -44,6 +64,7 @@ const userRoutes = require('./routes/UserRoutes');
 const notificationRoutes = require('./routes/notifications');
 const adminRoutes = require('./routes/admin');
 const wasteRequestRoutes = require('./routes/wasteRequest');
+const orderRoutes = require('./routes/orderRoutes');
 
 // Import middleware
 const { authMiddleware } = require('./middleware/auth');
@@ -54,7 +75,8 @@ app.use('/api/products', productRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/waste-requests', wasteRequestRoutes); // Add waste requests routes
+app.use('/api/waste-requests', wasteRequestRoutes);
+app.use('/api/orders', orderRoutes);
 app.use('/api', companyRoutes);
 
 // Protected example route
@@ -68,11 +90,25 @@ app.get('/api/protected', authMiddleware, (req, res) => {
 
 // Health check route
 app.get('/api/health', (req, res) => {
+  const dbState = mongoose.connection.readyState;
+  const dbStatusMap = {
+    0: 'Disconnected',
+    1: 'Connected',
+    2: 'Connecting',
+    3: 'Disconnecting'
+  };
+
   res.json({ 
     success: true,
-    status: 'OK', 
+    status: 'OK',
+    server: 'healthy',
     timestamp: new Date().toISOString(),
-    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
+    uptime: `${Math.floor(process.uptime())}s`,
+    database: {
+      status: dbStatusMap[dbState] || 'Unknown',
+      readyState: dbState,
+      name: mongoose.connection.name || 'none'
+    }
   });
 });
 
@@ -89,8 +125,28 @@ app.get('/', (req, res) => {
       admin: '/api/admin',
       notifications: '/api/notifications',
       wasteRequests: '/api/waste-requests',
+      orders: '/api/orders',
+      partners: '/api/partners',
       health: '/api/health'
     }
+  });
+});
+
+// 404 handler for API routes
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API route not found: ${req.method} ${req.originalUrl}`
+  });
+});
+
+// Centralized error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled server error:', err);
+  const status = err.statusCode || err.status || 500;
+  res.status(status).json({
+    success: false,
+    message: err.message || 'Internal Server Error'
   });
 });
 

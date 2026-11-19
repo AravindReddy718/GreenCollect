@@ -40,24 +40,25 @@ router.get('/collector-requests', async (req, res) => {
   }
 });
 
-// Approve collector request
-router.post('/approve-collector/:id', async (req, res) => {
+// Approve collector request (supports both POST and PUT)
+const approveCollectorHandler = async (req, res) => {
   try {
     const collector = await User.findById(req.params.id);
     if (!collector) {
-      return res.status(404).json({ error: 'Collector not found' });
+      return res.status(404).json({ success: false, error: 'Collector not found' });
     }
 
     if (!collector.collectorInfo) {
-      return res.status(400).json({ error: 'Collector info not found' });
+      collector.collectorInfo = {};
     }
 
     collector.collectorInfo.isApproved = true;
     collector.collectorInfo.status = 'approved';
     
-    await collector.save();
+    await collector.save({ validateBeforeSave: false });
 
     res.json({ 
+      success: true,
       message: 'Collector approved successfully', 
       collector: {
         id: collector._id,
@@ -68,28 +69,32 @@ router.post('/approve-collector/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Error approving collector:', err);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ success: false, error: 'Server error' });
   }
-});
+};
 
-// Reject collector request
-router.post('/reject-collector/:id', async (req, res) => {
+router.post('/approve-collector/:id', approveCollectorHandler);
+router.put('/approve-collector/:id', approveCollectorHandler);
+
+// Reject collector request (supports both POST and PUT)
+const rejectCollectorHandler = async (req, res) => {
   try {
     const collector = await User.findById(req.params.id);
     if (!collector) {
-      return res.status(404).json({ error: 'Collector not found' });
+      return res.status(404).json({ success: false, error: 'Collector not found' });
     }
 
     if (!collector.collectorInfo) {
-      return res.status(400).json({ error: 'Collector info not found' });
+      collector.collectorInfo = {};
     }
 
     collector.collectorInfo.isApproved = false;
     collector.collectorInfo.status = 'rejected';
     
-    await collector.save();
+    await collector.save({ validateBeforeSave: false });
 
     res.json({ 
+      success: true,
       message: 'Collector rejected successfully',
       collector: {
         id: collector._id,
@@ -100,9 +105,12 @@ router.post('/reject-collector/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Error rejecting collector:', err);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ success: false, error: 'Server error' });
   }
-});
+};
+
+router.post('/reject-collector/:id', rejectCollectorHandler);
+router.put('/reject-collector/:id', rejectCollectorHandler);
 
 module.exports = router;
 

@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { FaCoins, FaArrowLeft, FaMapMarkerAlt, FaTruck, FaCheck, FaShoppingCart } from 'react-icons/fa';
 import { useCart } from '../contexts/CartContext';
+import { useAuth } from '../contexts/AuthContext';
+import api from '../services/api';
 import './RedeemCheckout.css';
 
 interface Product {
@@ -34,6 +36,7 @@ const RedeemCheckout: React.FC = () => {
   const cart = (() => {
     try { return useCart(); } catch { return null; }
   })();
+  const { user: authUser, updateUser } = useAuth();
 
   const [currentStep, setCurrentStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
@@ -52,32 +55,39 @@ const RedeemCheckout: React.FC = () => {
   const [deliveryOption, setDeliveryOption] = useState<'standard' | 'express'>('standard');
   const [userCoins, setUserCoins] = useState(0);
 
-  // ✅ Load user from correct storage + use POINTS (correct field)
+  // Load user from auth context + storage
   useEffect(() => {
     try {
-      const loginMethod =
-        localStorage.getItem('loginMethod') || sessionStorage.getItem('loginMethod');
-
-      const storage = loginMethod === 'local' ? localStorage : sessionStorage;
-      const userDataRaw = storage.getItem('user');
-
-      if (userDataRaw) {
-        const user = JSON.parse(userDataRaw);
-        const balance = Number(user.points ?? user.coins ?? 0);
-
-        setUserCoins(isNaN(balance) ? 0 : balance);
-
+      if (authUser) {
+        setUserCoins(Number(authUser.points || 0));
         setAddress(prev => ({
           ...prev,
-          fullName: user.name || '',
-          email: user.email || '',
-          phone: user.phone || ''
+          fullName: prev.fullName || authUser.name || '',
+          email: prev.email || authUser.email || '',
+          phone: prev.phone || authUser.phone || ''
         }));
+      } else {
+        const loginMethod =
+          localStorage.getItem('loginMethod') || sessionStorage.getItem('loginMethod');
+        const storage = loginMethod === 'local' ? localStorage : sessionStorage;
+        const userDataRaw = storage.getItem('user');
+
+        if (userDataRaw) {
+          const user = JSON.parse(userDataRaw);
+          const balance = Number(user.points ?? user.coins ?? 0);
+          setUserCoins(isNaN(balance) ? 0 : balance);
+          setAddress(prev => ({
+            ...prev,
+            fullName: user.name || '',
+            email: user.email || '',
+            phone: user.phone || ''
+          }));
+        }
       }
     } catch (error) {
       console.error('Error loading user data:', error);
     }
-  }, []);
+  }, [authUser]);
 
   if (!product && (!cartItems || cartItems.length === 0)) {
     return (
@@ -116,68 +126,53 @@ const RedeemCheckout: React.FC = () => {
     }
   };
 
-  // ✅ Place Order — deduct POINTS correctly
+  // Place Order with backend persistence in MongoDB
   const handlePlaceOrder = async () => {
     if (!canAfford) return;
 
     setIsLoading(true);
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const res = await api.post('/api/orders', {
+        items: cartItems,
+        product,
+        address,
+        deliveryOption
+      });
 
-      const orderId = `GC-${Date.now().toString().slice(-8)}`;
+      const orderId = res.data?.orderId || `GC-${Date.now().toString().slice(-8)}`;
 
-      // If single product flow
-      if (product) {
-        const orderData = {
-          orderId,
-          product,
-          address,
-          deliveryOption,
-          totalCost,
-          createdAt: new Date().toISOString(),
-        };
+      // Also persist to localStorage for client-side order history backup
+      const orderData = {
+        orderId,
+        product,
+        items: cartItems,
+        address,
+        deliveryOption,
+        totalCost,
+        createdAt: new Date().toISOString(),
+      };
+      const existingOrders = JSON.parse(localStorage.getItem('redeem.orders') || '[]');
+      existingOrders.push(orderData);
+      localStorage.setItem('redeem.orders', JSON.stringify(existingOrders));
 
-        const existingOrders = JSON.parse(localStorage.getItem('redeem.orders') || '[]');
-        existingOrders.push(orderData);
-        localStorage.setItem('redeem.orders', JSON.stringify(existingOrders));
-      }
-
-      // If cart flow
       if (cartItems && cartItems.length > 0) {
-        const orderData = {
-          orderId,
-          items: cartItems,
-          address,
-          deliveryOption,
-          totalCost,
-          createdAt: new Date().toISOString(),
-        };
-        const existingOrders = JSON.parse(localStorage.getItem('redeem.orders') || '[]');
-        existingOrders.push(orderData);
-        localStorage.setItem('redeem.orders', JSON.stringify(existingOrders));
-
-        // Clear cart via context if available
         try {
           cart?.clearCart();
         } catch (e) {
-          // ignore if cart not available
+          // ignore
         }
       }
 
-      // ✅ Update user POINTS in correct storage
-      const loginMethod =
-        localStorage.getItem('loginMethod') || sessionStorage.getItem('loginMethod');
-
-      const storage = loginMethod === 'local' ? localStorage : sessionStorage;
-
-      const rawUser = storage.getItem('user') || '{}';
-      const userData = JSON.parse(rawUser);
-
-      const currentPoints = Number(userData.points ?? userData.coins ?? 0);
-      userData.points = Math.max(0, currentPoints - totalCost);
-
-      storage.setItem('user', JSON.stringify(userData));
+      // Update user points in context
+      if (typeof res.data?.remainingCoins === 'number') {
+        updateUser({ points: res.data.remainingCoins });
+        setUserCoins(res.data.remainingCoins);
+      } else {
+        const newBal = Math.max(0, userCoins - totalCost);
+        updateUser({ points: newBal });
+        setUserCoins(newBal);
+      }
 
       navigate('/order-success', {
         state: {
@@ -187,8 +182,9 @@ const RedeemCheckout: React.FC = () => {
         },
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error placing order:', error);
+      alert(error.response?.data?.message || 'Failed to place order. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -443,7 +439,7 @@ const RedeemCheckout: React.FC = () => {
                   </div>
                 ))}
               </div>
-            ) : (
+            ) : product ? (
               <div className="product-summary">
                 <img src={product.image} alt={product.name} />
                 <div className="product-info">
@@ -451,7 +447,7 @@ const RedeemCheckout: React.FC = () => {
                   <p>{product.category}</p>
                 </div>
               </div>
-            )}
+            ) : null}
 
             <div className="price-breakdown">
               {cartItems && cartItems.length > 0 ? (
@@ -463,14 +459,14 @@ const RedeemCheckout: React.FC = () => {
                     </span>
                   </div>
                 </>
-              ) : (
+              ) : product ? (
                 <div className="price-item">
                   <span>Product Price</span>
                   <span>
                     <FaCoins /> {product.price}
                   </span>
                 </div>
-              )}
+              ) : null}
               <div className="price-item">
                 <span>Delivery</span>
                 <span>

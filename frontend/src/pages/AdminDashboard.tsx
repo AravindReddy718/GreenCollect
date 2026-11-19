@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import './AdminDashboard.css';
+import { API_BASE_URL } from '../services/api';
 import { 
     FaUsers, FaUserCheck, FaChartLine, FaCheck, FaTimes, 
     FaEnvelope, FaPhone, FaMapMarkerAlt, FaClock, 
@@ -10,6 +11,7 @@ import AdminOrganisations from './AdminOrganisations';
 
 interface AdminDashboardProps {
     activeTab: string;
+    adminId?: string;
 }
 
 interface CollectorRequest {
@@ -78,7 +80,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
         };
     
         try {
-            const response = await fetch('https://greencollect.onrender.com/api/partners', {
+            const response = await fetch(`${API_BASE_URL}/api/partners`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -105,7 +107,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
     
     const fetchPartners = async () => {
         try {
-            const response = await fetch('https://greencollect.onrender.com/api/partners');
+            const response = await fetch(`${API_BASE_URL}/api/partners`);
             if (!response.ok) throw new Error('Failed to fetch partners');
             const data = await response.json();
             setRecycledPartners(data.companies);
@@ -118,7 +120,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
     const fetchCollectorRequests = async () => {
         try {
             setLoading(true);
-            const response = await fetch('https://greencollect.onrender.com/api/admin/collector-requests');
+            const response = await fetch(`${API_BASE_URL}/api/admin/collector-requests`);
             if (response.ok) {
                 const data = await response.json();
                 // Transform backend data to match frontend interface
@@ -152,7 +154,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
     const handleApproveRequest = async (requestId: string) => {
         try {
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-            const response = await fetch(`https://greencollect.onrender.com/api/users/approve-collector/${requestId}`, {
+            const response = await fetch(`${API_BASE_URL}/api/users/approve-collector/${requestId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -184,7 +186,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
     const handleRejectRequest = async (requestId: string) => {
         try {
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-            const response = await fetch(`https://greencollect.onrender.com/api/users/approve-collector/${requestId}`, {
+            const response = await fetch(`${API_BASE_URL}/api/users/approve-collector/${requestId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',

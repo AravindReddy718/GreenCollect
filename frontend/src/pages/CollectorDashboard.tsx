@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import './CollectorDashboard.css';
+import { API_BASE_URL } from '../services/api';
 
 import { 
     FaTruck, FaCheckCircle, FaMapMarkerAlt, FaClock, 
@@ -35,7 +36,7 @@ interface PickupRequest {
     collectorId?: string;
 }
 
-const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, collectorId }) => {
+const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, collectorId: _collectorId }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [priorityFilter, setPriorityFilter] = useState<string>('all');
@@ -81,7 +82,7 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
             }
             
             const queryString = params.toString();
-            const url = `https://greencollect.onrender.com/api/waste-requests${queryString ? `?${queryString}` : ''}`;
+            const url = `${API_BASE_URL}/api/waste-requests${queryString ? `?${queryString}` : ''}`;
             
             console.log('🔄 Fetching pickup requests from:', url);
 
@@ -126,7 +127,7 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
             console.log('🔄 Accepting request:', requestId);
             
-            const response = await fetch(`https://greencollect.onrender.com/api/waste-requests/${requestId}/accept`, {
+            const response = await fetch(`${API_BASE_URL}/api/waste-requests/${requestId}/accept`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -159,7 +160,7 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
         try {
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
             
-            const response = await fetch(`https://greencollect.onrender.com/api/waste-requests/${requestId}/reject`, {
+            const response = await fetch(`${API_BASE_URL}/api/waste-requests/${requestId}/reject`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -188,7 +189,7 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
             console.log('🔄 Starting pickup for request:', requestId);
             
-            const response = await fetch(`https://greencollect.onrender.com/api/waste-requests/${requestId}/start`, {
+            const response = await fetch(`${API_BASE_URL}/api/waste-requests/${requestId}/start`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -221,7 +222,7 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
         try {
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
             
-            const response = await fetch(`https://greencollect.onrender.com/api/waste-requests/${requestId}/complete`, {
+            const response = await fetch(`${API_BASE_URL}/api/waste-requests/${requestId}/complete`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',

@@ -4,29 +4,28 @@ const collectorInfoSchema = new mongoose.Schema({
   phone: { 
     type: String, 
     required: function() {
-      // Only require if parent user is a collector
-      return this.parent().role === 'collector';
+      return this.parent && typeof this.parent === 'function' && this.parent() ? this.parent().role === 'collector' : false;
     },
     match: [/^\+?[\d\s-()]+$/, 'Please enter a valid phone number']
   },
   address: { 
     type: String, 
     required: function() {
-      return this.parent().role === 'collector';
+      return this.parent && typeof this.parent === 'function' && this.parent() ? this.parent().role === 'collector' : false;
     },
     maxlength: [200, 'Address cannot exceed 200 characters']
   },
   vehicleType: { 
     type: String, 
     required: function() {
-      return this.parent().role === 'collector';
+      return this.parent && typeof this.parent === 'function' && this.parent() ? this.parent().role === 'collector' : false;
     },
     enum: ['Three-wheeler', 'Pickup Truck', 'Mini Truck', 'Truck', 'Car', 'Van', 'Motorcycle', 'Bicycle', 'Other']
   },
   vehicleNumberPlate: { 
     type: String, 
     required: function() {
-      return this.parent().role === 'collector';
+      return this.parent && typeof this.parent === 'function' && this.parent() ? this.parent().role === 'collector' : false;
     },
     uppercase: true,
     trim: true
@@ -34,7 +33,7 @@ const collectorInfoSchema = new mongoose.Schema({
   experience: { 
     type: String, 
     required: function() {
-      return this.parent().role === 'collector';
+      return this.parent && typeof this.parent === 'function' && this.parent() ? this.parent().role === 'collector' : false;
     },
     maxlength: [500, 'Experience description too long']
   },
@@ -91,6 +90,17 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  avatar: {
+    type: String,
+    default: ''
+  },
+  completedPickups: [{
+    requestId: { type: mongoose.Schema.Types.ObjectId, ref: 'WasteRequest' },
+    completedAt: { type: Date, default: Date.now },
+    coinsEarned: { type: Number, default: 0 },
+    wasteType: { type: String },
+    weight: { type: Number }
+  }],
   wasteRequests: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'WasteRequest',
@@ -117,7 +127,6 @@ userSchema.virtual('isApprovedCollector').get(function() {
 });
 
 // Index for better query performance
-userSchema.index({ email: 1 });
 userSchema.index({ role: 1 });
 userSchema.index({ 'collectorInfo.status': 1 });
 

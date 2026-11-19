@@ -1,10 +1,11 @@
 import './Register.css';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import axios from 'axios';
+import { Link, useNavigate } from 'react-router-dom';
+import api from '../services/api';
 import { FaUser, FaEnvelope, FaLock, FaPhone, FaMapMarkerAlt, FaTruck, FaIdCard, FaClipboard, FaCheck, FaArrowRight, FaRecycle, FaUsers } from 'react-icons/fa';
 
 const Register = () => {
+  const navigate = useNavigate();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -18,9 +19,12 @@ const Register = () => {
   const [experience, setExperience] = useState('');
 
   const [message, setMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    setMessage('');
+    setIsSubmitting(true);
 
     try {
       let payload: any = { name, email, password, role };
@@ -35,7 +39,7 @@ const Register = () => {
         };
       }
 
-      const res = await axios.post('https://greencollect.onrender.com/api/auth/register', payload);
+      const res = await api.post('/api/auth/register', payload);
 
       if (res.status === 201) {
         if (role === 'collector') {
@@ -44,10 +48,13 @@ const Register = () => {
           alert(`User Registration Successful!\n\nWelcome ${name}! You can now login.`);
         }
         console.log('Registration response:', res.data);
+        navigate('/login');
       }
     } catch (err: any) {
       console.error('Registration error:', err.response || err);
-      setMessage(err.response?.data?.error || 'Registration failed');
+      setMessage(err.response?.data?.error || err.response?.data?.message || 'Registration failed');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -306,9 +313,9 @@ const Register = () => {
                 </div>
               )}
 
-              <button type="submit" className="register-button">
+              <button type="submit" className="register-button" disabled={isSubmitting}>
                 <span>
-                  {isCollector ? 'Submit Application' : 'Join Janatha Garage'}
+                  {isSubmitting ? 'Registering...' : (isCollector ? 'Submit Application' : 'Join Janatha Garage')}
                 </span>
                 <FaArrowRight className="button-icon" />
               </button>

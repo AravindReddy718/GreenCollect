@@ -47,8 +47,8 @@ router.post('/', upload.single('productImage'), async (req, res) => {
       price: req.body.price,
       coinsRequired: req.body.coinsRequired,
       stockQuantity: req.body.stockQuantity,
-      productImage: uploadResult ? uploadResult.secure_url : null, // ✅ save image URL
-      cloudinaryId: uploadResult ? uploadResult.public_id : null,   // ✅ save Cloudinary ID for future delete
+      productImage: uploadResult ? uploadResult.secure_url : (req.body.productImage || 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=500'),
+      cloudinaryId: uploadResult ? uploadResult.public_id : null,
       isActive: true
     });
     console.log('New Product to be saved:', newProduct);

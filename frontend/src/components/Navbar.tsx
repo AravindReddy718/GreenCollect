@@ -19,6 +19,7 @@ import {
 } from 'react-icons/fa';
 import './Navbar.css';
 import { useCart } from '../contexts/CartContext';
+import { API_BASE_URL } from '../services/api';
 
 interface User {
   id: string;
@@ -138,7 +139,7 @@ const Navbar: React.FC<NavbarProps> = ({
         if (!token || !user) return;
 
         // Fetch updated user data to get latest coins
-        const response = await fetch('https://greencollect.onrender.com/api/auth/me', {
+        const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
           headers: {
             'Authorization': `Bearer ${token}`,
           },

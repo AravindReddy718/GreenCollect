@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-
-
 import './ProductManagement.css';
+import { API_BASE_URL } from '../services/api';
 import { FaPlus, FaEdit, FaTrash, FaImage, FaRupeeSign } from 'react-icons/fa';
 interface Product {
     id: string; // changed from number to string
@@ -17,41 +16,7 @@ interface Product {
 
 const ProductManagement = () => {
     const fileInputRef = useRef<HTMLInputElement | null>(null);
-    const [products, setProducts] = useState<Product[]>([
-        {
-            id: '1',
-            name: 'Eco-Friendly Water Bottle',
-            description: 'Reusable stainless steel water bottle, 1L capacity',
-            price: 299,
-            coins: 150,
-            category: 'Lifestyle',
-            image: '',
-            stock: 50,
-            isActive: true
-        },
-        {
-            id: '2',
-            name: 'Bamboo Toothbrush Set',
-            description: 'Set of 4 biodegradable bamboo toothbrushes',
-            price: 199,
-            coins: 80,
-            category: 'Personal Care',
-            image: '',
-            stock: 100,
-            isActive: true
-        },
-        {
-            id: '3',
-            name: 'Organic Cotton Tote Bag',
-            description: 'Large reusable shopping bag made from organic cotton',
-            price: 399,
-            coins: 200,
-            category: 'Fashion',
-            image: '',
-            stock: 30,
-            isActive: true
-        }
-    ]);
+    const [products, setProducts] = useState<Product[]>([]);
 
     const [showAddForm, setShowAddForm] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -75,7 +40,7 @@ const ProductManagement = () => {
       
     const fetchProducts = async () => {
         try {
-            const res = await fetch('https://greencollect.onrender.com/api/products'); // your GET route
+            const res = await fetch(`${API_BASE_URL}/api/products`); // your GET route
             const data = await res.json();
     
             if (!res.ok) throw new Error(data.message || 'Failed to fetch products');
@@ -121,7 +86,7 @@ const ProductManagement = () => {
         }
       
         try {
-          const res = await fetch('https://greencollect.onrender.com/api/products', {
+          const res = await fetch(`${API_BASE_URL}/api/products`, {
             method: 'POST',
             body: formPayload, // multipart/form-data
           });
@@ -184,7 +149,7 @@ const ProductManagement = () => {
         }
       
         try {
-            const res = await fetch(`https://greencollect.onrender.com/api/products/update/${editingProduct.id}`, {
+            const res = await fetch(`${API_BASE_URL}/api/products/update/${editingProduct.id}`, {
                 method: 'PUT',
                 body: formPayload
             });
@@ -232,7 +197,7 @@ const handleDeleteProduct = async (productId: string) => {
     if (!window.confirm('Are you sure you want to delete this product?')) return;
   
     try {
-      const res = await fetch(`https://greencollect.onrender.com/api/products/delete/${productId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/products/delete/${productId}`, {
         method: 'DELETE',
       });
   
@@ -254,7 +219,7 @@ const handleDeleteProduct = async (productId: string) => {
     if (!product) return;
   
     try {
-      const res = await fetch(`https://greencollect.onrender.com/api/products/update/${productId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/products/update/${productId}`, {
         method: 'PUT',
         body: JSON.stringify({ isActive: !product.isActive }),
         headers: { 'Content-Type': 'application/json' }

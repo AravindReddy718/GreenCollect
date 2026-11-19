@@ -8,12 +8,14 @@ import {
   FaTruck, FaExclamationTriangle 
 } from 'react-icons/fa';
 import { useAuth } from '../contexts/AuthContext';
+import api from '../services/api';
 
 const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
   const [mounted, setMounted] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [activities, setActivities] = useState<string[]>([]);
   const navigate = useNavigate();
-  const { user, logout, loading } = useAuth();
+  const { user, logout, loading, updateUser } = useAuth();
 
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 0);
@@ -27,13 +29,48 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
     }
   }, [onTabChange]);
 
-  // Load persisted avatar
+  // Load persisted avatar and activities
   useEffect(() => {
-    try {
-      const savedAvatar = localStorage.getItem('profile.avatar');
-      if (savedAvatar) setAvatarUrl(savedAvatar);
-    } catch {}
+    if (user?.avatar) {
+      setAvatarUrl(user.avatar);
+    } else {
+      try {
+        const savedAvatar = localStorage.getItem('profile.avatar');
+        if (savedAvatar) setAvatarUrl(savedAvatar);
+      } catch {}
+    }
+  }, [user?.avatar]);
+
+  useEffect(() => {
+    const fetchActivities = async () => {
+      try {
+        const res = await api.get('/api/waste-requests/my-requests');
+        if (res.data?.success && Array.isArray(res.data.requests)) {
+          const list = res.data.requests.slice(0, 5).map((r: any) =>
+            `${r.status.toUpperCase()}: ${r.wasteType} pickup (${r.estimatedWeight} kg) on ${r.pickupDate}`
+          );
+          if (list.length > 0) setActivities(list);
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+    fetchActivities();
   }, []);
+
+  const handleEditAvatar = async () => {
+    const url = window.prompt('Enter image URL for your profile avatar:', avatarUrl || '');
+    if (url && url.trim()) {
+      try {
+        await api.put('/api/auth/profile', { avatar: url.trim() });
+        setAvatarUrl(url.trim());
+        updateUser({ avatar: url.trim() });
+        localStorage.setItem('profile.avatar', url.trim());
+      } catch (err) {
+        console.error('Failed to update avatar:', err);
+      }
+    }
+  };
 
   const handleLogout = () => {
     logout();
@@ -113,7 +150,7 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
               ) : (
                 <FaUserCircle className="avatar-icon" />
               )}
-              <button className="avatar-edit-btn">
+              <button className="avatar-edit-btn" onClick={handleEditAvatar}>
                 <FaEdit /> Edit
               </button>
             </div>
@@ -157,7 +194,9 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
             )}
           </div>
           <div className="user-stats">
-           
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ffcc00', fontWeight: 'bold', fontSize: '1.1rem' }}>
+              <FaCoins /> <span>{user.points || 0} Eco Coins</span>
+            </div>
             <button className="edit-btn" onClick={handleLogout}>
               <FaShieldAlt /> Logout
             </button>
@@ -175,11 +214,11 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
               </div>
               <div className="setting-row">
                 <div className="setting-left"><FaShieldAlt /> Password</div>
-                <div className="setting-right"><button className="btn btn-outline">Change</button></div>
+                <div className="setting-right"><button className="btn btn-outline" onClick={() => alert('Password change request sent')}>Change</button></div>
               </div>
               <div className="setting-row">
                 <div className="setting-left"><FaBell /> Notifications</div>
-                <div className="setting-right"><button className="btn btn-yellow">Manage</button></div>
+                <div className="setting-right"><button className="btn btn-yellow" onClick={() => alert('Notifications enabled')}>Manage</button></div>
               </div>
             </div>
           </section>
@@ -187,9 +226,17 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
           <section className="glass-card">
             <h3 className="section-title">Recent Activity</h3>
             <ul className="activity-list">
-              <li className="activity-item">Earned 50 points from completed pickup</li>
-              <li className="activity-item">Updated address in profile</li>
-              <li className="activity-item">Scheduled a plastic collection</li>
+              {activities.length > 0 ? (
+                activities.map((act, idx) => (
+                  <li key={idx} className="activity-item">{act}</li>
+                ))
+              ) : (
+                <>
+                  <li className="activity-item">Joined Janatha Garage community</li>
+                  <li className="activity-item">Account initialized with starter bonus</li>
+                  <li className="activity-item">Ready to schedule your first waste pickup</li>
+                </>
+              )}
             </ul>
           </section>
 

@@ -190,6 +190,7 @@ function AppContent() {
                   role={user?.role || 'user'}
                   onLogout={handleLogout}
                   activeTab={activeTab}
+                  userId={user?.id}
                 />
               </ProtectedRoute>
             } 
@@ -250,26 +251,34 @@ function AppContent() {
           />
 
           {/* Collector-only Routes */}
-          {/* Add collector-specific routes here when needed */}
-          {/* <Route 
+          <Route 
             path="/collector-dashboard" 
             element={
               <CollectorRoute>
-                <CollectorDashboard />
+                <Dashboard
+                  role="collector"
+                  onLogout={handleLogout}
+                  activeTab={activeTab}
+                  userId={user?.id}
+                />
               </CollectorRoute>
             } 
-          /> */}
+          />
 
           {/* Admin-only Routes */}
-          {/* Add admin-specific routes here when needed */}
-          {/* <Route 
+          <Route 
             path="/admin" 
             element={
               <AdminRoute>
-                <AdminDashboard />
+                <Dashboard
+                  role="admin"
+                  onLogout={handleLogout}
+                  activeTab={activeTab}
+                  userId={user?.id}
+                />
               </AdminRoute>
             } 
-          /> */}
+          />
 
           {/* Error Routes */}
           <Route path="/unauthorized" element={<UnauthorizedPage />} />

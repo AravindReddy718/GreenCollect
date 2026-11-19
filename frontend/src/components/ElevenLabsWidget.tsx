@@ -5,7 +5,7 @@ interface ElevenLabsWidgetProps {
 }
 
 const ElevenLabsWidget = ({ isLoggedIn }: ElevenLabsWidgetProps) => {
-  const [isWidgetReady, setIsWidgetReady] = useState(false);
+  const [_isWidgetReady, setIsWidgetReady] = useState(false);
 
   useEffect(() => {
     if (isLoggedIn) {

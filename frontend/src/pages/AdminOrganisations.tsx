@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { API_BASE_URL } from '../services/api';
 import './AdminDashboard.css';
 
 interface OrgRequest {
@@ -24,9 +25,8 @@ const AdminOrganisations: React.FC = () => {
   const fetchOrgRequests = async () => {
     setLoading(true);
     try {
-      const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:4000';
       const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-      const res = await fetch(`${API_BASE}/api/waste-requests`, {
+      const res = await fetch(`${API_BASE_URL}/api/waste-requests`, {
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -65,9 +65,8 @@ const AdminOrganisations: React.FC = () => {
 
   const handleAccept = async (id: string) => {
     try {
-      const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:4000';
       const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-      const res = await fetch(`${API_BASE}/api/admin/organisation-requests/${id}/accept`, {
+      const res = await fetch(`${API_BASE_URL}/api/admin/organisation-requests/${id}/accept`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -85,9 +84,8 @@ const AdminOrganisations: React.FC = () => {
 
   const handleReject = async (id: string) => {
     try {
-      const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:4000';
       const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-      const res = await fetch(`${API_BASE}/api/admin/organisation-requests/${id}/reject`, {
+      const res = await fetch(`${API_BASE_URL}/api/admin/organisation-requests/${id}/reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../services/api';
 import './Organisation.css';
 
 const Organisation: React.FC = () => {
@@ -40,8 +41,7 @@ const Organisation: React.FC = () => {
         isOrganisationRequest: true
       };
 
-      const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'https://greencollect.onrender.com';
-      const res = await fetch(`${API_BASE.replace(/\/$/, '')}/api/waste-requests/organisation`, {
+      const res = await fetch(`${API_BASE_URL}/api/waste-requests/organisation`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

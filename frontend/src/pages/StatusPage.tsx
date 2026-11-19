@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import './StatusPage.css';
+import { API_BASE_URL } from '../services/api';
 import {
     FaCalendar,
     FaMapMarkerAlt,
@@ -9,7 +10,6 @@ import {
     FaTimesCircle,
     FaSearch,
     FaCoins,
-    FaChartLine,
     FaSync,
     FaSpinner,
     FaUser,
@@ -85,7 +85,7 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
             console.log('🔄 Fetching user pickups from my-requests endpoint...');
             
             // Use the my-requests endpoint that doesn't require user ID
-            const response = await fetch('https://greencollect.onrender.com/api/waste-requests/my-requests', {
+            const response = await fetch(`${API_BASE_URL}/api/waste-requests/my-requests`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
@@ -236,7 +236,9 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
                         <p className="page-subtitle">Track your waste pickup orders and view their current status in real-time</p>
                     </div>
                     <div className="header-actions">
-                        
+                        <button className="btn btn-outline" onClick={refreshData} title="Refresh requests" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                            <FaSync /> Refresh
+                        </button>
                     </div>
                 </div>
 
