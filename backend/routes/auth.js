@@ -33,6 +33,8 @@ const loginLimiter = createLimiter({ limit: 10, windowMs: 15 * 60 * 1000 });
 // Password-reset limits: 5 link requests per IP + email, 20 reset attempts per IP, per 15 minutes
 const forgotLimiter = createLimiter({ limit: 5, windowMs: 15 * 60 * 1000 });
 const resetLimiter = createLimiter({ limit: 20, windowMs: 15 * 60 * 1000 });
+// Change-password limit: 10 attempts per signed-in user per 15 minutes (stops guessing the current password)
+const changeLimiter = createLimiter({ limit: 10, windowMs: 15 * 60 * 1000 });
 
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
@@ -144,7 +146,7 @@ router.post('/register', async (req, res) => {
       role: user.role,
       points: user.points || 0,
       phone: user.phone,
-      memberSince: user.memberSince
+      memberSince: user.memberSince || user.createdAt
     };
 
     return res.status(201).json({ 
@@ -229,7 +231,7 @@ router.post('/login', async (req, res) => {
       role: user.role,
       points: user.points || 0,
       phone: user.phone,
-      memberSince: user.memberSince,
+      memberSince: user.memberSince || user.createdAt,
       avatar: user.avatar,
       collectorInfo: user.collectorInfo
     };
@@ -343,6 +345,55 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/auth/change-password
+ * Body: { currentPassword, newPassword }
+ * Signed-in users change their password. Other devices are signed out; this device gets a fresh token.
+ */
+router.put('/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    // 400 (not 401) for a wrong current password, so the app does not treat it as an expired session
+    const fail = (field, error) => res.status(400).json({ success: false, field, error });
+
+    if (changeLimiter.isBlocked(req.userId)) {
+      return res.status(429).json({ success: false, error: 'Too many attempts. Please try again in 15 minutes.' });
+    }
+    if (typeof currentPassword !== 'string' || !currentPassword) {
+      return fail('currentPassword', 'Please enter your current password');
+    }
+    const invalidPassword = passwordError(newPassword);
+    if (invalidPassword) return fail('newPassword', invalidPassword);
+
+    const user = await User.findById(req.userId).select('password');
+    changeLimiter.hit(req.userId);
+    if (!user || !(await bcrypt.compare(currentPassword, user.password))) {
+      return fail('currentPassword', 'Current password is incorrect');
+    }
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return fail('newPassword', 'New password must be different from your current password');
+    }
+
+    const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    const updated = await User.findOneAndUpdate(
+      { _id: user._id },
+      {
+        $set: { password: hashed },
+        $inc: { tokenVersion: 1 },
+        $unset: { resetPasswordTokenHash: '', resetPasswordExpires: '' }
+      },
+      { new: true }
+    ).select('role tokenVersion');
+
+    changeLimiter.reset(req.userId);
+    const token = jwt.sign({ id: updated._id, role: updated.role, tv: updated.tokenVersion || 0 }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    res.json({ success: true, message: 'Password changed. Any other devices have been signed out.', token });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // GET /api/auth/profile
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
@@ -363,7 +414,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
         role: user.role,
         points: user.points || 0,
         phone: user.phone,
-        memberSince: user.memberSince,
+        memberSince: user.memberSince || user.createdAt,
         avatar: user.avatar,
         collectorInfo: user.collectorInfo,
         wasteRequests: user.wasteRequests,
@@ -400,7 +451,7 @@ router.get('/me', authMiddleware, async (req, res) => {
         role: user.role,
         points: user.points || 0,
         phone: user.phone,
-        memberSince: user.memberSince,
+        memberSince: user.memberSince || user.createdAt,
         avatar: user.avatar,
         collectorInfo: user.collectorInfo
       }
@@ -457,7 +508,7 @@ router.put('/profile', authMiddleware, async (req, res) => {
         role: user.role,
         points: user.points || 0,
         phone: user.phone,
-        memberSince: user.memberSince,
+        memberSince: user.memberSince || user.createdAt,
         avatar: user.avatar,
         collectorInfo: user.collectorInfo
       }

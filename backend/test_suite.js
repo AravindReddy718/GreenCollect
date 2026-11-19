@@ -811,6 +811,41 @@ const runAllTests = async () => {
     for (let i = 0; i < 5; i++) limitStatuses.push((await forgot(resetUser.email)).status);
     assert(limitStatuses.includes(429), `[Reset] Repeated link requests are rate limited (${limitStatuses.join(',')})`);
 
+    // ================= CHANGE PASSWORD (signed in, from the profile page) =================
+    console.log('\n--- TEST 22: Change password ---');
+    const cpUser = { name: 'Change Tester', email: `change_${timestamp}@example.com`, password: 'FirstPass123', role: 'user' };
+    const cpReg = await request('/api/auth/register', { method: 'POST', body: cpUser });
+    const cpOtherDevice = (await request('/api/auth/login', { method: 'POST', body: { email: cpUser.email, password: 'FirstPass123' } })).data.token;
+    const change = (token, body) => request('/api/auth/change-password', { method: 'PUT', headers: token ? authHeader(token) : {}, body });
+
+    const cpNoAuth = await change(null, { currentPassword: 'FirstPass123', newPassword: 'SecondPass456' });
+    assert(cpNoAuth.status === 401, '[Change] Requires sign-in', `got ${cpNoAuth.status}`);
+    const cpWrong = await change(cpReg.data.token, { currentPassword: 'NotMyPass1', newPassword: 'SecondPass456' });
+    assert(cpWrong.status === 400 && cpWrong.data.field === 'currentPassword', '[Change] Wrong current password -> 400 (not 401, so the session is not dropped)', JSON.stringify(cpWrong.data));
+    const cpWeak = await change(cpReg.data.token, { currentPassword: 'FirstPass123', newPassword: 'weakpass' });
+    assert(cpWeak.status === 400 && cpWeak.data.field === 'newPassword', '[Change] Weak new password rejected');
+    const cpSame = await change(cpReg.data.token, { currentPassword: 'FirstPass123', newPassword: 'FirstPass123' });
+    assert(cpSame.status === 400 && cpSame.data.field === 'newPassword', '[Change] New password must differ from the current one');
+
+    const cpOk = await change(cpReg.data.token, { currentPassword: 'FirstPass123', newPassword: 'SecondPass456' });
+    assert(cpOk.status === 200 && Boolean(cpOk.data.token), '[Change] Valid change succeeds and returns a fresh token for this device', JSON.stringify(cpOk.data).slice(0, 120));
+
+    const cpOldLogin = await request('/api/auth/login', { method: 'POST', body: { email: cpUser.email, password: 'FirstPass123' } });
+    assert(cpOldLogin.status === 401, `[Change] OLD password no longer logs in (${cpOldLogin.status})`);
+    const cpNewLogin = await request('/api/auth/login', { method: 'POST', body: { email: cpUser.email, password: 'SecondPass456' } });
+    assert(cpNewLogin.status === 200, `[Change] New password logs in (${cpNewLogin.status})`);
+    const cpStored = await db.collection('users').findOne({ email: cpUser.email });
+    assert(await bcrypt.compare('SecondPass456', cpStored.password) && !(await bcrypt.compare('FirstPass123', cpStored.password)), '[Change] Database holds the new password hash only');
+
+    const cpOtherMe = await request('/api/auth/me', { headers: authHeader(cpOtherDevice) });
+    assert(cpOtherMe.status === 401, `[Change] Other signed-in devices are signed out (${cpOtherMe.status})`);
+    const cpThisMe = await request('/api/auth/me', { headers: authHeader(cpOk.data.token) });
+    assert(cpThisMe.status === 200, '[Change] This device stays signed in with the fresh token');
+
+    const cpGuesses = [];
+    for (let i = 0; i < 11; i++) cpGuesses.push((await change(cpOk.data.token, { currentPassword: 'Guess' + i + 'xx1', newPassword: 'ThirdPass789' })).status);
+    assert(cpGuesses.includes(429), `[Change] Guessing the current password is rate limited (${cpGuesses.slice(-3).join(',')})`);
+
     // Admin overview numbers come from the database, not hardcoded values
     const statsAsUser = await request('/api/admin/stats', { headers: authHeader(userToken) });
     assert(statsAsUser.status === 403, '[Real stats] Normal user cannot read admin stats', `got ${statsAsUser.status}`);

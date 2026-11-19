@@ -28,6 +28,7 @@ interface AuthContextType {
   login: (user: User, token: string, rememberMe: boolean) => void;
   logout: () => void;
   updateUser: (data: Partial<User>) => void;
+  updateToken: (token: string) => void;
   refreshUser: () => Promise<void>;
   loading: boolean;
 }
@@ -139,11 +140,17 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
     });
   };
 
+  // Saves a fresh token (after a password change) in the same storage chosen at login
+  const updateToken = (token: string) => {
+    getStorage().setItem('token', token);
+  };
+
   const value: AuthContextType = {
     user,
     login,
     logout,
     updateUser,
+    updateToken,
     refreshUser,
     loading
   };
