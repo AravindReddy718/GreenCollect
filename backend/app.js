@@ -7,6 +7,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const companyRoutes = require('./routes/companyRoutes');
+const User = require('./models/Users');
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -45,10 +46,14 @@ const io = new Server(httpServer, {
 });
 
 // Only logged-in users can open a socket; the room comes from the verified token, not the client
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth && socket.handshake.auth.token;
-    socket.userId = jwt.verify(token, process.env.JWT_SECRET).id;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Same session check as the API: tokens from before a password reset are rejected
+    const user = await User.findById(decoded.id).select('tokenVersion');
+    if (!user || (decoded.tv || 0) !== (user.tokenVersion || 0)) return next(new Error('Unauthorized'));
+    socket.userId = decoded.id;
     next();
   } catch (err) {
     next(new Error('Unauthorized'));

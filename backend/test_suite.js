@@ -8,6 +8,8 @@ const { spawnSync } = require('child_process');
 
 // Tests never use the real JWT secret or database
 process.env.JWT_SECRET = 'test-only-jwt-secret';
+// Emails go to an in-memory outbox instead of SMTP
+process.env.NODE_ENV = 'test';
 
 const TEST_PORT = 4001;
 const BASE_URL = `http://localhost:${TEST_PORT}`;
@@ -745,6 +747,69 @@ const runAllTests = async () => {
     assert(profilePhone.status === 400, `[Field] Profile phone "-----" -> ${profilePhone.status}`);
     const orgPhone = await request('/api/waste-requests/organisation', { method: 'POST', body: { ...orgPayload, contactPhone: '((((' } });
     assert(orgPhone.status === 400, `[Field] Organisation phone "((((" -> ${orgPhone.status}`);
+
+    // ================= FORGOT / RESET PASSWORD =================
+    console.log('\n--- TEST 21: Forgot and reset password ---');
+    const { outbox } = require('./utils/mailer');
+    const resetUser = { name: 'Reset Tester', email: `reset_${timestamp}@example.com`, password: 'OldPass123', role: 'user' };
+    const resetReg = await request('/api/auth/register', { method: 'POST', body: resetUser });
+    const oldSession = resetReg.data.token;
+    const forgot = (email) => request('/api/auth/forgot-password', { method: 'POST', body: { email } });
+    const resetWith = (token, password) => request('/api/auth/reset-password', { method: 'POST', body: { token, password } });
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+    const unknownReply = await forgot(`nobody_${timestamp}@example.com`);
+    const knownReply = await forgot(resetUser.email.toUpperCase());
+    assert(unknownReply.status === 200 && knownReply.status === 200 && unknownReply.data.message === knownReply.data.message,
+      '[Reset] Same reply for unknown and known emails (no account enumeration)');
+    const badEmailReply = await forgot('not-an-email');
+    assert(badEmailReply.status === 400 && badEmailReply.data.field === 'email', '[Reset] Malformed email rejected with 400');
+
+    await wait(200); // the email is sent in the background
+    const mail = outbox.filter(m => m.to === resetUser.email).pop();
+    const linkToken = mail && (mail.text.match(/reset-password\?token=([a-f0-9]{64})/) || [])[1];
+    assert(Boolean(linkToken), '[Reset] Reset email sent containing a single-use link');
+    assert(!outbox.some(m => m.to === `nobody_${timestamp}@example.com`), '[Reset] No email sent for an unknown address');
+    const storedReset = await db.collection('users').findOne({ email: resetUser.email });
+    assert(storedReset.resetPasswordTokenHash && storedReset.resetPasswordTokenHash !== linkToken && storedReset.resetPasswordExpires > new Date(),
+      '[Reset] Only a SHA-256 hash of the token is stored, with an expiry');
+    const meBefore = await request('/api/auth/me', { headers: authHeader(oldSession) });
+    assert(meBefore.status === 200 && !JSON.stringify(meBefore.data).includes('resetPassword'), '[Reset] Token hash is never returned by the API');
+
+    const weakReset = await resetWith(linkToken, 'weakpass');
+    assert(weakReset.status === 400 && weakReset.data.field === 'password', '[Reset] Weak new password rejected', JSON.stringify(weakReset.data));
+    const badFormat = await resetWith('abc', 'NewPass456');
+    assert(badFormat.status === 400 && badFormat.data.field === 'token', '[Reset] Malformed token rejected');
+    const wrongToken = await resetWith('a'.repeat(64), 'NewPass456');
+    assert(wrongToken.status === 400 && wrongToken.data.field === 'token', '[Reset] Unknown token rejected');
+
+    const goodReset = await resetWith(linkToken, 'NewPass456');
+    assert(goodReset.status === 200, '[Reset] Valid token + strong password resets the password', JSON.stringify(goodReset.data));
+    const reuse = await resetWith(linkToken, 'Another789');
+    assert(reuse.status === 400 && reuse.data.field === 'token', '[Reset] The same link cannot be used twice');
+
+    const oldPwLogin = await request('/api/auth/login', { method: 'POST', body: { email: resetUser.email, password: 'OldPass123' } });
+    const newPwLogin = await request('/api/auth/login', { method: 'POST', body: { email: resetUser.email, password: 'NewPass456' } });
+    assert(oldPwLogin.status === 401 && newPwLogin.status === 200, `[Reset] Old password stops working (${oldPwLogin.status}), new one works (${newPwLogin.status})`);
+    const meOldSession = await request('/api/auth/me', { headers: authHeader(oldSession) });
+    assert(meOldSession.status === 401, `[Reset] Sessions from before the reset are signed out (${meOldSession.status} "${meOldSession.data?.error}")`);
+    const meNewSession = await request('/api/auth/me', { headers: authHeader(newPwLogin.data.token) });
+    assert(meNewSession.status === 200, '[Reset] A session started after the reset works');
+    const clearedDoc = await db.collection('users').findOne({ email: resetUser.email });
+    assert(!clearedDoc.resetPasswordTokenHash && !clearedDoc.resetPasswordExpires, '[Reset] Token fields are cleared after use');
+
+    // Expired link
+    await forgot(resetUser.email);
+    await wait(200);
+    const expiredToken = (outbox.filter(m => m.to === resetUser.email).pop().text.match(/token=([a-f0-9]{64})/) || [])[1];
+    await db.collection('users').updateOne({ email: resetUser.email }, { $set: { resetPasswordExpires: new Date(Date.now() - 1000) } });
+    const expiredReset = await resetWith(expiredToken, 'Expired123');
+    assert(expiredReset.status === 400 && expiredReset.data.field === 'token', '[Reset] An expired link is rejected');
+
+    // Request limit: 5 reset emails per address per 15 minutes
+    const limitStatuses = [];
+    for (let i = 0; i < 5; i++) limitStatuses.push((await forgot(resetUser.email)).status);
+    assert(limitStatuses.includes(429), `[Reset] Repeated link requests are rate limited (${limitStatuses.join(',')})`);
 
     // Admin overview numbers come from the database, not hardcoded values
     const statsAsUser = await request('/api/admin/stats', { headers: authHeader(userToken) });

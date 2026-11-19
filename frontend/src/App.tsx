@@ -8,6 +8,8 @@ import ElevenLabsEmbed from './components/ElevenLabsEmbed';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import Profile from './pages/Profile';
 import Dashboard from './pages/Dashboard';
 import StatusPage from './pages/StatusPage';
@@ -197,6 +199,17 @@ function AppContent() {
             } 
           />
           
+          <Route
+            path="/forgot-password"
+            element={
+              <PublicRoute>
+                <ForgotPassword />
+              </PublicRoute>
+            }
+          />
+          {/* Opened from the emailed link, so it works whether or not someone is signed in */}
+          <Route path="/reset-password" element={<ResetPassword />} />
+
           {/* Protected Routes - Accessible to all authenticated users */}
           <Route 
             path="/dashboard" 

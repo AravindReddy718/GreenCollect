@@ -210,3 +210,31 @@ body {
   font-size: 0.8rem;
   margin: 0.4rem 0 0;
 }
+
+/* Forgot / reset password pages */
+.form-success {
+  color: #b9f6ca;
+  background: rgba(76, 175, 80, 0.12);
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  border-radius: 12px;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 1.25rem;
+  line-height: 1.5;
+}
+
+.form-success p {
+  margin: 0 0 0.4rem;
+}
+
+.form-success p:last-child {
+  margin-bottom: 0;
+}
+
+.login-button.reset-link-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  margin-top: 1rem;
+}

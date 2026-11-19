@@ -132,8 +132,9 @@ Edit `backend/.env`:
 | `JWT_SECRET` | Yes | Long random string used to sign login tokens. The server will not start without it. |
 | `JWT_EXPIRES_IN` | No | Token lifetime, default `7d` |
 | `PORT` | No | Default `4000` |
-| `FRONTEND_URL` | No | Extra allowed CORS origin |
+| `FRONTEND_URL` | No | Frontend address: allowed for CORS and used in password-reset links (default `http://localhost:5173`) |
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Only for product image uploads | Cloudinary account keys |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Only to email password-reset links | Any SMTP provider (e.g. Gmail with an App Password, Brevo, SendGrid) |
 
 Create an admin and load the demo data, then start the server:
 
@@ -157,6 +158,12 @@ npm run dev
 ```
 
 Open http://localhost:5173
+
+### 🔑 Forgot password
+
+Click **Forgot Password?** on the login page and enter your email. A single-use reset link (valid for 30 minutes) is emailed to you; after a reset, every device that was signed in is signed out.
+
+Without SMTP settings, the backend prints the email (including the link) in its terminal instead, so the flow can be tried locally without an email account. Set `NODE_ENV=production` on a real server so links are never printed.
 
 ### 4️⃣ Demo accounts
 

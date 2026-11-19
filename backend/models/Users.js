@@ -85,6 +85,21 @@ const userSchema = new mongoose.Schema({
     required: [true, 'Password is required'],
     minlength: [6, 'Password must be at least 6 characters']
   },
+  // Password reset: only a SHA-256 hash of the emailed token is stored, and it is single-use
+  resetPasswordTokenHash: {
+    type: String,
+    select: false
+  },
+  resetPasswordExpires: {
+    type: Date,
+    select: false
+  },
+  // Session version: every login token carries it; a password reset increases it,
+  // so all tokens issued before the reset stop working
+  tokenVersion: {
+    type: Number,
+    default: 0
+  },
   phone: {
     type: String,
     validate: phoneValidator

@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const User = require('../models/Users');
 
@@ -24,38 +25,17 @@ const {
   normalizeVehicleNumber
 } = require('../utils/validation');
 const { validationMessage } = require('../utils/sendError');
+const { createLimiter } = require('../utils/rateLimit');
+const { sendMail } = require('../utils/mailer');
 
-// Failed-login limit: 10 wrong attempts per IP + email in 15 minutes, then 429
-const FAILED_LOGIN_LIMIT = 10;
-const FAILED_LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const failedLogins = new Map();
+// Failed-login limit: 10 attempts per IP + email in 15 minutes, then 429
+const loginLimiter = createLimiter({ limit: 10, windowMs: 15 * 60 * 1000 });
+// Password-reset limits: 5 link requests per IP + email, 20 reset attempts per IP, per 15 minutes
+const forgotLimiter = createLimiter({ limit: 5, windowMs: 15 * 60 * 1000 });
+const resetLimiter = createLimiter({ limit: 20, windowMs: 15 * 60 * 1000 });
 
-const isLoginBlocked = (key) => {
-  const entry = failedLogins.get(key);
-  if (!entry) return false;
-  if (Date.now() - entry.first > FAILED_LOGIN_WINDOW_MS) {
-    failedLogins.delete(key);
-    return false;
-  }
-  return entry.count >= FAILED_LOGIN_LIMIT;
-};
-
-const recordFailedLogin = (key) => {
-  const entry = failedLogins.get(key);
-  if (!entry || Date.now() - entry.first > FAILED_LOGIN_WINDOW_MS) {
-    failedLogins.set(key, { count: 1, first: Date.now() });
-  } else {
-    entry.count += 1;
-  }
-};
-
-// Drop expired entries so the map cannot grow without limit
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of failedLogins) {
-    if (now - entry.first > FAILED_LOGIN_WINDOW_MS) failedLogins.delete(key);
-  }
-}, FAILED_LOGIN_WINDOW_MS).unref();
+const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 /**
  * POST /register
@@ -155,7 +135,7 @@ router.post('/register', async (req, res) => {
     }
 
     // ✅ For users/admins, generate JWT immediately
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const token = jwt.sign({ id: user._id, role: user.role, tv: user.tokenVersion || 0 }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
     const userSafe = {
       id: user._id,
@@ -209,7 +189,7 @@ router.post('/login', async (req, res) => {
     }
 
     const limitKey = `${req.ip}|${email}`;
-    if (isLoginBlocked(limitKey)) {
+    if (loginLimiter.isBlocked(limitKey)) {
       return res.status(429).json({
         success: false,
         error: 'Too many failed login attempts. Please try again in 15 minutes.'
@@ -217,7 +197,7 @@ router.post('/login', async (req, res) => {
     }
     // Count the attempt before any await, so a burst of parallel guesses is limited too;
     // a successful login clears it below
-    recordFailedLogin(limitKey);
+    loginLimiter.hit(limitKey);
 
     const user = await User.findOne({ email });
     const ok = user ? await bcrypt.compare(password, user.password) : false;
@@ -227,7 +207,7 @@ router.post('/login', async (req, res) => {
         error: 'Invalid credentials'
       });
     }
-    failedLogins.delete(limitKey);
+    loginLimiter.reset(limitKey);
 
     // Approval is checked only after the password, so it never reveals which accounts exist
     if (user.role === 'collector' && !user.collectorInfo?.isApproved) {
@@ -240,7 +220,7 @@ router.post('/login', async (req, res) => {
       });
     }
         
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const token = jwt.sign({ id: user._id, role: user.role, tv: user.tokenVersion || 0 }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     
     const userSafe = {
       id: user._id,
@@ -267,6 +247,99 @@ router.post('/login', async (req, res) => {
       success: false,
       error: 'Internal server error' 
     });
+  }
+});
+
+/**
+ * POST /api/auth/forgot-password
+ * Body: { email }
+ * Always answers the same way, so it never reveals whether an account exists.
+ */
+const FORGOT_REPLY = 'If an account exists for that email, a password reset link has been sent.';
+
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ success: false, field: 'email', error: 'Please enter a valid email address' });
+    }
+
+    const limitKey = `${req.ip}|${email}`;
+    if (forgotLimiter.isBlocked(limitKey)) {
+      return res.status(429).json({ success: false, error: 'Too many reset requests. Please try again in 15 minutes.' });
+    }
+    forgotLimiter.hit(limitKey);
+
+    const user = await User.findOne({ email }).select('_id name email');
+    if (user) {
+      const token = crypto.randomBytes(32).toString('hex');
+      await User.updateOne(
+        { _id: user._id },
+        { $set: { resetPasswordTokenHash: hashToken(token), resetPasswordExpires: new Date(Date.now() + RESET_TOKEN_TTL_MS) } }
+      );
+
+      const appUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+      const link = `${appUrl}/reset-password?token=${token}`;
+      // Sent in the background so the reply time is the same whether or not the account exists
+      sendMail({
+        to: user.email,
+        subject: 'Reset your Janatha Garage password',
+        text: `Hi ${user.name},\n\nUse this link to choose a new password (valid for 30 minutes):\n${link}\n\nIf you did not ask for this, you can ignore this email; your password stays the same.`,
+        html: `<p>Hi ${user.name.replace(/[<>&"']/g, '')},</p>
+<p>Use the button below to choose a new password. The link is valid for 30 minutes.</p>
+<p><a href="${link}" style="display:inline-block;padding:10px 18px;background:#ffcc00;color:#000;border-radius:8px;text-decoration:none;font-weight:600">Reset password</a></p>
+<p>If you did not ask for this, you can ignore this email; your password stays the same.</p>`
+      }).catch(err => console.error('Password reset email failed:', err.message));
+    }
+
+    res.json({ success: true, message: FORGOT_REPLY });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /api/auth/reset-password
+ * Body: { token, password }
+ * The token is single-use and expires 30 minutes after it was requested.
+ */
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, password } = req.body;
+
+    if (resetLimiter.isBlocked(req.ip)) {
+      return res.status(429).json({ success: false, error: 'Too many attempts. Please try again in 15 minutes.' });
+    }
+    resetLimiter.hit(req.ip);
+
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+      return res.status(400).json({ success: false, field: 'token', error: 'This reset link is invalid or has expired. Please request a new one.' });
+    }
+    const invalidPassword = passwordError(password);
+    if (invalidPassword) return res.status(400).json({ success: false, field: 'password', error: invalidPassword });
+
+    const hashed = await bcrypt.hash(password, SALT_ROUNDS);
+    // Atomic: the token is consumed in the same step that sets the new password, so it works only once
+    const user = await User.findOneAndUpdate(
+      { resetPasswordTokenHash: hashToken(token), resetPasswordExpires: { $gt: new Date() } },
+      {
+        $set: { password: hashed },
+        $inc: { tokenVersion: 1 },
+        $unset: { resetPasswordTokenHash: '', resetPasswordExpires: '' }
+      },
+      { new: true }
+    ).select('email');
+
+    if (!user) {
+      return res.status(400).json({ success: false, field: 'token', error: 'This reset link is invalid or has expired. Please request a new one.' });
+    }
+
+    loginLimiter.reset(`${req.ip}|${user.email}`);
+    res.json({ success: true, message: 'Your password has been reset. Please log in with your new password.' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 

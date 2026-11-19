@@ -35,6 +35,14 @@ const authMiddleware = async (req, res, next) => {
       });
     }
 
+    // After a password reset, every login token issued before it stops working
+    if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Your password was changed. Please log in again.'
+      });
+    }
+
     // A collector whose approval was revoked loses access immediately, even with an unexpired token
     if (user.role === 'collector' && !user.collectorInfo?.isApproved) {
       return res.status(401).json({
