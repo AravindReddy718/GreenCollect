@@ -163,7 +163,7 @@ Open http://localhost:5173
 
 Click **Forgot Password?** on the login page and enter your email. A single-use reset link (valid for 30 minutes) is emailed to you; after a reset, every device that was signed in is signed out.
 
-Without SMTP settings, the backend prints the email (including the link) in its terminal instead, so the flow can be tried locally without an email account. In development, if sending fails (for example wrong SMTP login), the backend explains why and still prints the link. Set `NODE_ENV=production` on a real server so links are never printed.
+Without SMTP settings, the backend prints the email (including the link) in its terminal instead, so the flow can be tried locally without an email account. In development the link is also printed in the backend terminal after the email is sent, and if sending fails (for example wrong SMTP login) the backend explains why and still prints the link. Set `NODE_ENV=production` on a real server so links are never printed.
 
 **Using Gmail:** turn on 2-Step Verification for the account, create an [App Password](https://myaccount.google.com/apppasswords), and put your real Gmail address in `SMTP_USER` and the 16-character App Password in `SMTP_PASS`. Your normal Gmail password is rejected (`535 Username and Password not accepted`).
 

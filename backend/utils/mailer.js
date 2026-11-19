@@ -15,7 +15,7 @@ const isConfigured = () => {
 };
 
 const printEmail = (to, subject, text) =>
-  console.log(`\n[dev email] Here is the email instead:\nTo: ${to}\nSubject: ${subject}\n${text}\n`);
+  console.log(`To: ${to}\nSubject: ${subject}\n${text}\n`);
 
 // A clear next step for the most common SMTP problems
 const smtpHint = (err) => {
@@ -56,7 +56,7 @@ async function sendMail({ to, subject, text, html }) {
       console.error(`Email to ${to} not sent: SMTP is not configured (set SMTP_HOST, SMTP_USER, SMTP_PASS).`);
       return;
     }
-    console.log('\n[dev email] SMTP is not configured (or still has the example values).');
+    console.log('\n[dev email] SMTP is not configured (or still has the example values). Here is the email instead:');
     printEmail(to, subject, text);
     return;
   }
@@ -68,13 +68,19 @@ async function sendMail({ to, subject, text, html }) {
       text,
       html
     });
+    // Development: also show the email (and its link) here. Never in production, where anyone
+    // who can read the server logs could otherwise use a reset link.
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`\n[dev email] Email sent to ${to}. Copy for development:`);
+      printEmail(to, subject, text);
+    }
   } catch (err) {
     const reason = String(err.message || err).split('\n')[0];
     if (process.env.NODE_ENV === 'production') {
       throw new Error(`${reason} ${smtpHint(err)}`);
     }
     // Development: explain the problem and still show the email, so testing is never blocked
-    console.error(`\n[dev email] Could not send email to ${to}: ${reason}\n${smtpHint(err)}`);
+    console.error(`\n[dev email] Could not send email to ${to}: ${reason}\n${smtpHint(err)}\nHere is the email instead:`);
     printEmail(to, subject, text);
   }
 }
