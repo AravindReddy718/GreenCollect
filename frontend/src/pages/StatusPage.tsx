@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import './StatusPage.css';
-import { API_BASE_URL, getErrorMessage } from '../services/api';
+import api, { API_BASE_URL, getErrorMessage } from '../services/api';
+import PickupReceipt from '../components/PickupReceipt';
 import {
     FaCalendar,
     FaMapMarkerAlt,
@@ -52,6 +53,20 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [mounted, setMounted] = useState(false);
     const [pickups, setPickups] = useState<PickupRequest[]>([]);
+
+    // Receipt modal for completed pickups
+    const [receiptId, setReceiptId] = useState<string | null>(null);
+
+    // Cancel a pending pickup (the server only allows it while it is still pending)
+    const handleCancelRequest = async (requestId: string) => {
+        if (!window.confirm('Cancel this pickup request?')) return;
+        try {
+            await api.put(`/api/waste-requests/${requestId}/cancel`);
+            await fetchUserPickups();
+        } catch (err) {
+            alert(getErrorMessage(err, 'Could not cancel the request.'));
+        }
+    };
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
@@ -448,7 +463,7 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
                                     {pickup.status === 'pending' && (
                                         <>
                                             <button className="btn btn-secondary">Edit Request</button>
-                                            <button className="btn btn-danger">Cancel Request</button>
+                                            <button className="btn btn-danger" onClick={() => handleCancelRequest(pickup._id)}>Cancel Request</button>
                                         </>
                                     )}
                                     {pickup.status === 'accepted' && (
@@ -458,7 +473,12 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
                                         <button className="btn btn-primary">Track Live Location</button>
                                     )}
                                     {pickup.status === 'completed' && (
-                                        <button className="btn btn-secondary">View Receipt</button>
+                                        <>
+                                            <button className="btn btn-secondary" onClick={() => setReceiptId(pickup._id)}>View Receipt</button>
+                                            {receiptId === pickup._id && (
+                                                <PickupReceipt requestId={pickup._id} onClose={() => setReceiptId(null)} />
+                                            )}
+                                        </>
                                     )}
                                     {(pickup.status === 'rejected' || pickup.status === 'cancelled') && (
                                         <button className="btn btn-primary">Reschedule</button>

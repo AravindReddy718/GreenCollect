@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import './UserDashboard.css';
-import { API_BASE_URL } from '../services/api';
+import api, { API_BASE_URL, getErrorMessage } from '../services/api';
+import PickupReceipt from '../components/PickupReceipt';
 import type { User } from '../contexts/AuthContext';
 import {
     FaTrash, FaTruck, FaCheckCircle,
@@ -61,6 +62,20 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
     const [mounted, setMounted] = useState(false);
     const [user, setUser] = useState<User | null>(null);
     const [pickups, setPickups] = useState<PickupRequest[]>([]);
+
+    // Receipt modal for completed pickups
+    const [receiptId, setReceiptId] = useState<string | null>(null);
+
+    // Cancel a pending pickup (the server only allows it while it is still pending)
+    const handleCancelRequest = async (requestId: string) => {
+        if (!window.confirm('Cancel this pickup request?')) return;
+        try {
+            await api.put(`/api/waste-requests/${requestId}/cancel`);
+            await fetchUserPickups();
+        } catch (err) {
+            alert(getErrorMessage(err, 'Could not cancel the request.'));
+        }
+    };
     const [loading, setLoading] = useState(false);
     const [stats, setStats] = useState({
         totalWaste: 0,
@@ -826,7 +841,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                                     <div className="booking-action-section">
                                         <div
                                             className="booking-main-option"
+                                            role="button"
+                                            tabIndex={0}
                                             onClick={() => setShowSchedulePickup(true)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                    e.preventDefault();
+                                                    setShowSchedulePickup(true);
+                                                }
+                                            }}
                                         >
                                             <div className="booking-main-icon">
                                                 <FaCalendar />
@@ -1035,7 +1058,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                                             {pickup.status === 'pending' && (
                                                 <>
                                                     <button className="btn btn-secondary">Edit Request</button>
-                                                    <button className="btn btn-danger">Cancel Request</button>
+                                                    <button className="btn btn-danger" onClick={() => handleCancelRequest(pickup._id)}>Cancel Request</button>
                                                 </>
                                             )}
                                             {pickup.status === 'accepted' && (
@@ -1045,7 +1068,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                                                 <button className="btn btn-primary">Track Live Location</button>
                                             )}
                                             {pickup.status === 'completed' && (
-                                                <button className="btn btn-secondary">View Receipt</button>
+                                                <>
+                                                    <button className="btn btn-secondary" onClick={() => setReceiptId(pickup._id)}>View Receipt</button>
+                                                    {receiptId === pickup._id && (
+                                                        <PickupReceipt requestId={pickup._id} onClose={() => setReceiptId(null)} />
+                                                    )}
+                                                </>
                                             )}
                                             {(pickup.status === 'rejected' || pickup.status === 'cancelled') && (
                                                 <button className="btn btn-primary">Reschedule</button>

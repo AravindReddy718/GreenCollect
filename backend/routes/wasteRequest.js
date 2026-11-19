@@ -30,6 +30,7 @@ const MAX_INSTRUCTIONS_LENGTH = 500;
 const MAX_PICKUP_WEIGHT_KG = 100;
 const MAX_ORGANISATION_WEIGHT_KG = 10000;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+const WASTE_TYPES = ['plastic', 'paper', 'electronics', 'metal', 'glass', 'organic', 'mixed'];
 
 // Helper function to calculate coins value
 function calculateCoinsValue(weight, wasteType) {
@@ -203,38 +204,32 @@ router.post('/', authMiddleware, async (req, res) => {
     } = req.body;
 
     const userId = req.user.id;
+    // Every error names its field so the form can show it next to the right input
+    const fail = (field, message) => res.status(400).json({ success: false, field, message });
 
-    // Validation
-    if (!pickupDate || !pickupTime || !wasteType || !estimatedWeight || !pickupAddress) {
-      return res.status(400).json({
-        success: false,
-        message: 'All required fields must be filled'
-      });
-    }
+    if (!pickupDate || !pickupTime) return fail('pickupDate', 'Please choose a pickup date and time');
+    const dateError = pickupDateError(pickupDate);
+    if (dateError) return fail('pickupDate', dateError);
+    if (!TIME_RE.test(String(pickupTime))) return fail('pickupDate', 'Invalid pickup time');
+
+    if (!WASTE_TYPES.includes(wasteType)) return fail('wasteType', 'Please choose a waste type');
 
     const weight = parseFloat(estimatedWeight);
     if (isNaN(weight) || weight <= 0 || weight > MAX_PICKUP_WEIGHT_KG) {
-      return res.status(400).json({
-        success: false,
-        message: `Estimated weight must be between 0 and ${MAX_PICKUP_WEIGHT_KG} kg`
-      });
+      return fail('estimatedWeight', `Estimated weight must be between 0 and ${MAX_PICKUP_WEIGHT_KG} kg`);
     }
 
-    const dateError = pickupDateError(pickupDate);
-    if (dateError) {
-      return res.status(400).json({ success: false, message: dateError });
+    const address = typeof pickupAddress === 'string' ? pickupAddress.trim() : '';
+    if (address.length < 10 || address.length > MAX_ADDRESS_LENGTH || !/\p{L}/u.test(address)) {
+      return fail('pickupAddress', `Pickup address must be 10-${MAX_ADDRESS_LENGTH} characters and include letters`);
     }
 
-    if (!TIME_RE.test(String(pickupTime))) {
-      return res.status(400).json({ success: false, message: 'Invalid pickup time' });
-    }
+    const phone = normalizePhone(contactNumber);
+    if (!phone) return fail('contactNumber', PHONE_MESSAGE);
 
-    if (typeof pickupAddress !== 'string' || !pickupAddress.trim() || pickupAddress.length > MAX_ADDRESS_LENGTH) {
-      return res.status(400).json({ success: false, message: `Pickup address must be 1-${MAX_ADDRESS_LENGTH} characters` });
-    }
-
-    if (instructions && String(instructions).length > MAX_INSTRUCTIONS_LENGTH) {
-      return res.status(400).json({ success: false, message: `Instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters` });
+    const notes = typeof instructions === 'string' ? instructions.trim() : '';
+    if (notes.length > MAX_INSTRUCTIONS_LENGTH) {
+      return fail('instructions', `Instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`);
     }
 
     const user = await User.findById(userId).select('name email');
@@ -251,9 +246,9 @@ router.post('/', authMiddleware, async (req, res) => {
       pickupTime,
       wasteType,
       estimatedWeight: weight,
-      pickupAddress,
-      contactNumber: contactNumber || 'Not provided',
-      instructions: instructions || 'None',
+      pickupAddress: address,
+      contactNumber: phone,
+      instructions: notes || 'None',
       collectorStatus: 'pending',
       collectionStatus: 'not_collected'
     });
@@ -612,6 +607,52 @@ router.put('/:requestId/cancel', authMiddleware, async (req, res) => {
     });
   } catch (error) {
     sendError(res, error, 'Server error while cancelling request');
+  }
+});
+
+// @route   GET /api/waste-requests/:requestId/receipt
+// @desc    Receipt for a completed pickup
+// @access  Private (the user who booked it, or an admin)
+router.get('/:requestId/receipt', authMiddleware, async (req, res) => {
+  try {
+    const request = await WasteRequest.findById(req.params.requestId)
+      .populate('user', 'name email completedPickups')
+      .populate('assignedCollector', 'name');
+
+    if (!request) {
+      return res.status(404).json({ success: false, message: 'Pickup not found' });
+    }
+    const ownerId = request.user ? request.user._id.toString() : null;
+    if (ownerId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'You can only view receipts for your own pickups' });
+    }
+    if (request.collectorStatus !== 'completed') {
+      return res.status(400).json({ success: false, message: 'A receipt is available once the pickup is completed' });
+    }
+
+    // Coins actually credited for this pickup (falls back to the same formula used when crediting)
+    const credited = (request.user?.completedPickups || []).find(p => p.requestId && p.requestId.toString() === request._id.toString());
+    const coinsEarned = credited ? credited.coinsEarned : calculateCoinsValue(request.estimatedWeight, request.wasteType);
+
+    res.json({
+      success: true,
+      receipt: {
+        receiptNumber: `JG-${request._id.toString().slice(-8).toUpperCase()}`,
+        requestId: request._id,
+        issuedTo: { name: request.user?.name || '', email: request.user?.email || '' },
+        pickupAddress: request.pickupAddress,
+        contactNumber: request.contactNumber,
+        wasteType: request.wasteType,
+        estimatedWeight: request.estimatedWeight,
+        pickupDate: request.pickupDate ? request.pickupDate.toISOString().split('T')[0] : null,
+        pickupTime: request.pickupTime,
+        completedAt: request.collectedAt || (credited && credited.completedAt) || request.updatedAt,
+        collectorName: request.assignedCollector?.name || null,
+        coinsEarned
+      }
+    });
+  } catch (error) {
+    sendError(res, error, 'Server error while loading receipt');
   }
 });
 

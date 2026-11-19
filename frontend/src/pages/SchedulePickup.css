@@ -499,3 +499,7 @@ textarea:disabled {
     transform: translateY(0);
   }
 }
+/* Inline validation */
+.schedule-pickup-form .form-group .input-invalid {
+  border-color: #ff6b6b;
+}

@@ -846,6 +846,55 @@ const runAllTests = async () => {
     for (let i = 0; i < 11; i++) cpGuesses.push((await change(cpOk.data.token, { currentPassword: 'Guess' + i + 'xx1', newPassword: 'ThirdPass789' })).status);
     assert(cpGuesses.includes(429), `[Change] Guessing the current password is rate limited (${cpGuesses.slice(-3).join(',')})`);
 
+    // ================= SCHEDULE PICKUP: EVERY FIELD VALIDATED =================
+    console.log('\n--- TEST 23: Schedule pickup field validation ---');
+    const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    const validPickup = { pickupDate: tomorrowStr, pickupTime: '10:30', wasteType: 'plastic', estimatedWeight: 4, pickupAddress: '12 Lake View Road, Bengaluru', contactNumber: '9876543210', instructions: '' };
+    const schedule = (overrides) => request('/api/waste-requests', { method: 'POST', headers: authHeader(userToken), body: { ...validPickup, ...overrides } });
+    const expectPickupField = async (label, overrides, field) => {
+      const r = await schedule(overrides);
+      assert(r.status === 400 && r.data?.field === field, `[Pickup] ${label} -> ${r.status} field=${r.data?.field} "${r.data?.message}"`);
+    };
+
+    await expectPickupField('Missing contact number', { contactNumber: undefined }, 'contactNumber');
+    await expectPickupField('Empty contact number', { contactNumber: '' }, 'contactNumber');
+    for (const bad of ['-----', '((((', '1', '0000000000', 'abcdefghij', '12345678901234']) {
+      await expectPickupField(`Contact number ${JSON.stringify(bad)}`, { contactNumber: bad }, 'contactNumber');
+    }
+    await expectPickupField('Missing date', { pickupDate: undefined }, 'pickupDate');
+    await expectPickupField('Missing waste type', { wasteType: '' }, 'wasteType');
+    await expectPickupField('Unknown waste type', { wasteType: 'gold' }, 'wasteType');
+    await expectPickupField('Missing weight', { estimatedWeight: undefined }, 'estimatedWeight');
+    await expectPickupField('Missing address', { pickupAddress: '' }, 'pickupAddress');
+    await expectPickupField('Address "abc" (too short)', { pickupAddress: 'abc' }, 'pickupAddress');
+    await expectPickupField('Address "1234567890" (no letters)', { pickupAddress: '1234567890' }, 'pickupAddress');
+    await expectPickupField('Instructions over 500 characters', { instructions: 'x'.repeat(501) }, 'instructions');
+
+    const okPickup = await schedule({ contactNumber: '+91 98765 43210', instructions: '  Ring the bell  ' });
+    const okPickupDoc = await db.collection('wasterequests').findOne({ _id: new mongoose.Types.ObjectId(okPickup.data?.request?.id) });
+    assert(okPickup.status === 201 && okPickupDoc.contactNumber === '9876543210' && okPickupDoc.instructions === 'Ring the bell',
+      `[Pickup] Valid booking accepted; phone stored as ${okPickupDoc?.contactNumber}, instructions trimmed`);
+
+    // ================= PICKUP RECEIPT =================
+    console.log('\n--- TEST 24: Pickup receipt ---');
+    const receiptFor = (id, token) => request(`/api/waste-requests/${id}/receipt`, { headers: authHeader(token) });
+    const ownReceipt = await receiptFor(requestId, userToken);
+    const rc = ownReceipt.data?.receipt;
+    assert(ownReceipt.status === 200 && /^JG-[0-9A-F]{8}$/.test(rc?.receiptNumber || ''), `[Receipt] Owner gets the receipt for a completed pickup (${rc?.receiptNumber})`);
+    assert(rc && rc.coinsEarned === 60 && rc.wasteType === 'plastic' && rc.estimatedWeight === 5 && rc.issuedTo.email === testUser.email && rc.completedAt,
+      `[Receipt] Shows the coins actually credited (${rc?.coinsEarned}), waste, weight, owner and completion time`);
+    assert(Boolean(rc?.collectorName), `[Receipt] Shows the collector who completed it (${rc?.collectorName})`);
+    const otherReceipt = await receiptFor(requestId, user2Token);
+    assert(otherReceipt.status === 403, `[Receipt] Another user cannot read it (${otherReceipt.status})`);
+    const collectorReceipt = await receiptFor(requestId, collectorToken);
+    assert(collectorReceipt.status === 403, `[Receipt] A collector cannot read the user's receipt (${collectorReceipt.status})`);
+    const adminReceipt = await receiptFor(requestId, adminToken);
+    assert(adminReceipt.status === 200, `[Receipt] Admin can read it (${adminReceipt.status})`);
+    const pendingReceipt = await receiptFor(okPickup.data.request.id, userToken);
+    assert(pendingReceipt.status === 400 && /completed/.test(pendingReceipt.data?.message), '[Receipt] Not available before the pickup is completed');
+    const badIdReceipt = await receiptFor('abc', userToken);
+    assert(badIdReceipt.status === 400, `[Receipt] Invalid ID -> ${badIdReceipt.status}`);
+
     // Admin overview numbers come from the database, not hardcoded values
     const statsAsUser = await request('/api/admin/stats', { headers: authHeader(userToken) });
     assert(statsAsUser.status === 403, '[Real stats] Normal user cannot read admin stats', `got ${statsAsUser.status}`);
