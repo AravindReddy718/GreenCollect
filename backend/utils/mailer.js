@@ -79,4 +79,16 @@ async function sendMail({ to, subject, text, html }) {
   }
 }
 
-module.exports = { sendMail, outbox };
+// One line for the startup log, so it is obvious whether reset emails will really be sent
+const describeMailConfig = () => {
+  if (!isConfigured()) {
+    return process.env.NODE_ENV === 'production'
+      ? '📧 Email: SMTP not configured, password-reset emails will NOT be sent'
+      : '📧 Email: SMTP not configured, password-reset links will be printed in this terminal';
+  }
+  const user = process.env.SMTP_USER;
+  const masked = user.includes('@') ? `${user.slice(0, 3)}***@${user.split('@')[1]}` : `${user.slice(0, 3)}***`;
+  return `📧 Email: sending via ${process.env.SMTP_HOST} as ${masked}`;
+};
+
+module.exports = { sendMail, outbox, describeMailConfig };

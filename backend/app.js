@@ -160,6 +160,7 @@ const server = httpServer.listen(PORT, () => {
   console.log(`🎯 Server running on port ${PORT}`);
   console.log(`🔗 http://localhost:${PORT}`);
   console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
+  console.log(require('./utils/mailer').describeMailConfig());
 });
 
 server.on('error', (err) => {
