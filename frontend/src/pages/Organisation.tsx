@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, getErrorMessage } from '../services/api';
 import './Organisation.css';
 
 const Organisation: React.FC = () => {
@@ -51,11 +51,11 @@ const Organisation: React.FC = () => {
       });
       // Read text first to avoid double-reading the body stream
       const text = await res.text();
-      let data: any = null;
+      let data: { success?: boolean; message?: string } | null = null;
       if (text) {
         try {
           data = JSON.parse(text);
-        } catch (err) {
+        } catch {
           // not JSON — keep raw text for message
           console.error('Non-JSON response from organisation endpoint:', text);
           data = { success: false, message: text };
@@ -70,8 +70,8 @@ const Organisation: React.FC = () => {
       } else {
         setMessage((data && data.message) || `Request failed (status ${res.status})`);
       }
-    } catch (err: any) {
-      setMessage(err?.message || 'Network error');
+    } catch (err) {
+      setMessage(getErrorMessage(err, 'Network error'));
     } finally {
       setLoading(false);
     }
@@ -85,43 +85,43 @@ const Organisation: React.FC = () => {
       </div>
 
       <form className="org-form" onSubmit={handleSubmit}>
-        <label>Organisation Name</label>
-        <input value={organisationName} onChange={(e) => setOrganisationName(e.target.value)} required />
+        <label htmlFor="org-organisation-name">Organisation Name</label>
+        <input id="org-organisation-name" value={organisationName} onChange={(e) => setOrganisationName(e.target.value)} required />
 
-        <label>Type</label>
-        <select value={type} onChange={(e) => setType(e.target.value)}>
+        <label htmlFor="org-type">Type</label>
+        <select id="org-type" value={type} onChange={(e) => setType(e.target.value)}>
           <option value="school">School</option>
           <option value="company">Company</option>
           <option value="ngo">NGO</option>
           <option value="other">Other</option>
         </select>
 
-        <label>Contact Person</label>
-        <input value={contactName} onChange={(e) => setContactName(e.target.value)} required />
+        <label htmlFor="org-contact-person">Contact Person</label>
+        <input id="org-contact-person" value={contactName} onChange={(e) => setContactName(e.target.value)} required />
 
-        <label>Contact Email</label>
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <label htmlFor="org-contact-email">Contact Email</label>
+        <input id="org-contact-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
 
-        <label>Contact Phone</label>
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} />
+        <label htmlFor="org-contact-phone">Contact Phone</label>
+        <input id="org-contact-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
 
-        <label>Pickup Address</label>
-        <input value={address} onChange={(e) => setAddress(e.target.value)} required />
+        <label htmlFor="org-pickup-address">Pickup Address</label>
+        <input id="org-pickup-address" value={address} onChange={(e) => setAddress(e.target.value)} required />
 
-        <label>Waste Types (comma separated)</label>
-        <input value={wasteTypes} onChange={(e) => setWasteTypes(e.target.value)} placeholder="plastic, paper, metal" />
+        <label htmlFor="org-waste-types-comma-separated">Waste Types (comma separated)</label>
+        <input id="org-waste-types-comma-separated" value={wasteTypes} onChange={(e) => setWasteTypes(e.target.value)} placeholder="plastic, paper, metal" />
 
-        <label>Estimated Weight (kg)</label>
-        <input type="number" value={estimatedWeight} onChange={(e) => setEstimatedWeight(e.target.value)} />
+        <label htmlFor="org-estimated-weight-kg">Estimated Weight (kg)</label>
+        <input id="org-estimated-weight-kg" type="number" value={estimatedWeight} onChange={(e) => setEstimatedWeight(e.target.value)} />
 
-        <label>Preferred Date</label>
-        <input type="date" value={preferredDate} onChange={(e) => setPreferredDate(e.target.value)} />
+        <label htmlFor="org-preferred-date">Preferred Date</label>
+        <input id="org-preferred-date" type="date" value={preferredDate} onChange={(e) => setPreferredDate(e.target.value)} />
 
-        <label>Preferred Time</label>
-        <input type="time" value={preferredTime} onChange={(e) => setPreferredTime(e.target.value)} />
+        <label htmlFor="org-preferred-time">Preferred Time</label>
+        <input id="org-preferred-time" type="time" value={preferredTime} onChange={(e) => setPreferredTime(e.target.value)} />
 
-        <label>Special Instructions</label>
-        <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+        <label htmlFor="org-special-instructions">Special Instructions</label>
+        <textarea id="org-special-instructions" value={instructions} onChange={(e) => setInstructions(e.target.value)} />
 
         <div className="form-actions">
           <button className="btn btn-primary" type="submit" disabled={loading}>{loading ? 'Submitting...' : 'Submit Request'}</button>

@@ -1,46 +1,41 @@
 const express = require('express');
 const Notification = require('../models/Notification');
+const { authMiddleware, requireRole } = require('../middleware/auth');
+const { sendError } = require('../utils/sendError');
 const router = express.Router();
 
-// List latest notifications for a user
-router.get('/', async (req, res) => {
+// List latest notifications for the logged-in user
+router.get('/', authMiddleware, async (req, res) => {
   try {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'userId is required' });
-    const items = await Notification.find({ userId })
+    const items = await Notification.find({ userId: req.user.id })
       .sort({ createdAt: -1 })
       .limit(50)
       .lean();
     res.json({ items });
   } catch (err) {
-    console.error('List notifications error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err, 'Internal server error', 'error');
   }
 });
 
-// Mark all as read for a user
-router.post('/clear', async (req, res) => {
+// Mark all as read for the logged-in user
+router.post('/clear', authMiddleware, async (req, res) => {
   try {
-    const { userId } = req.body || {};
-    if (!userId) return res.status(400).json({ error: 'userId is required' });
-    await Notification.updateMany({ userId, read: false }, { $set: { read: true } });
+    await Notification.updateMany({ userId: req.user.id, read: false }, { $set: { read: true } });
     res.json({ ok: true });
   } catch (err) {
-    console.error('Clear notifications error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err, 'Internal server error', 'error');
   }
 });
 
-// Create a notification (for testing/demo)
-router.post('/', async (req, res) => {
+// Create a notification for a user (admin only)
+router.post('/', authMiddleware, requireRole(['admin']), async (req, res) => {
   try {
     const { userId, message, type, meta } = req.body || {};
     if (!userId || !message) return res.status(400).json({ error: 'userId and message are required' });
     const doc = await Notification.create({ userId, message, type, meta });
     res.status(201).json({ item: doc });
   } catch (err) {
-    console.error('Create notification error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    sendError(res, err, 'Internal server error', 'error');
   }
 });
 

@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/Users');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) throw new Error('JWT_SECRET must be set in backend/.env');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -34,6 +35,14 @@ const authMiddleware = async (req, res, next) => {
       });
     }
 
+    // A collector whose approval was revoked loses access immediately, even with an unexpired token
+    if (user.role === 'collector' && !user.collectorInfo?.isApproved) {
+      return res.status(401).json({
+        success: false,
+        error: 'Collector access has been revoked or is pending approval'
+      });
+    }
+
     req.user = {
       id: user._id.toString(),
       _id: user._id,
@@ -46,8 +55,6 @@ const authMiddleware = async (req, res, next) => {
 
     next();
   } catch (err) {
-    console.error('Auth middleware error:', err);
-    
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({ 
         success: false,
@@ -62,6 +69,7 @@ const authMiddleware = async (req, res, next) => {
       });
     }
 
+    console.error('Auth middleware error:', err);
     return res.status(500).json({ 
       success: false,
       error: 'Server error in authentication' 

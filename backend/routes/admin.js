@@ -1,19 +1,61 @@
 // routes/admin.js
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const User = require('../models/Users');
 const WasteRequest = require('../models/WasteRequest');
+const Order = require('../models/Order');
+const { authMiddleware, requireRole } = require('../middleware/auth');
+const { sendError } = require('../utils/sendError');
+
+// Every /api/admin route requires a logged-in admin
+router.use(authMiddleware, requireRole(['admin']));
+
+// Real platform numbers for the admin overview
+router.get('/stats', async (req, res) => {
+  try {
+    const [totalUsers, approvedCollectors, completedPickups, wasteAgg, coinsAgg, topCollectors] = await Promise.all([
+      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: 'collector', 'collectorInfo.isApproved': true }),
+      WasteRequest.countDocuments({ collectorStatus: 'completed' }),
+      WasteRequest.aggregate([
+        { $match: { collectorStatus: 'completed' } },
+        { $group: { _id: null, kg: { $sum: '$estimatedWeight' } } }
+      ]),
+      Order.aggregate([{ $group: { _id: null, coins: { $sum: '$totalCoins' } } }]),
+      WasteRequest.aggregate([
+        { $match: { collectorStatus: 'completed', assignedCollector: { $ne: null } } },
+        { $group: { _id: '$assignedCollector', completedPickups: { $sum: 1 } } },
+        { $sort: { completedPickups: -1 } },
+        { $limit: 5 },
+        { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'collector' } },
+        { $unwind: '$collector' },
+        { $project: { _id: 0, id: '$_id', name: '$collector.name', completedPickups: 1 } }
+      ])
+    ]);
+
+    res.json({
+      success: true,
+      stats: {
+        totalUsers,
+        approvedCollectors,
+        completedPickups,
+        wasteRecycledKg: Math.round(wasteAgg[0]?.kg || 0),
+        coinsRedeemed: coinsAgg[0]?.coins || 0,
+        topCollectors
+      }
+    });
+  } catch (err) {
+    sendError(res, err, 'Server error while loading stats');
+  }
+});
 
 // Get all collector requests
 router.get('/collector-requests', async (req, res) => {
   try {
-    console.log('Fetching collector requests...');
-    
     const collectors = await User.find({ 
       role: 'collector'
     }).select('name email role collectorInfo createdAt').lean();
-    
-    console.log(`Found ${collectors.length} collectors`);
     
     // Transform the data for frontend
     const transformedData = collectors.map(user => ({
@@ -29,14 +71,13 @@ router.get('/collector-requests', async (req, res) => {
         vehicleNumberPlate: user.collectorInfo?.vehicleNumberPlate || 'N/A',
         experience: user.collectorInfo?.experience || 'No experience provided',
         isApproved: user.collectorInfo?.isApproved || false,
-        status: user.collectorInfo?.isApproved ? 'approved' : 'pending'
+        status: user.collectorInfo?.status || (user.collectorInfo?.isApproved ? 'approved' : 'pending')
       }
     }));
     
     res.json(transformedData);
   } catch (err) {
-    console.error('Error fetching collector requests:', err);
-    res.status(500).json({ error: 'Server error' });
+    sendError(res, err, 'Server error');
   }
 });
 
@@ -68,8 +109,7 @@ const approveCollectorHandler = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Error approving collector:', err);
-    res.status(500).json({ success: false, error: 'Server error' });
+    sendError(res, err, 'Server error');
   }
 };
 
@@ -104,8 +144,7 @@ const rejectCollectorHandler = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Error rejecting collector:', err);
-    res.status(500).json({ success: false, error: 'Server error' });
+    sendError(res, err, 'Server error');
   }
 };
 
@@ -122,13 +161,26 @@ router.post('/organisation-requests/:id/accept', async (req, res) => {
     const wr = await WasteRequest.findById(reqId);
     if (!wr) return res.status(404).json({ success: false, message: 'Organisation request not found' });
 
+    if (wr.collectorStatus !== 'pending') {
+      return res.status(400).json({ success: false, message: `Request already ${wr.collectorStatus}` });
+    }
+
+    // Accepting assigns the request to an approved collector so it appears in their dashboard
+    const { collectorId } = req.body || {};
+    const collector = mongoose.isValidObjectId(collectorId)
+      ? await User.findOne({ _id: collectorId, role: 'collector', 'collectorInfo.isApproved': true })
+      : null;
+    if (!collector) {
+      return res.status(400).json({ success: false, message: 'Choose an approved collector to assign' });
+    }
+
     wr.collectorStatus = 'accepted';
+    wr.assignedCollector = collector._id;
     await wr.save();
 
-    res.json({ success: true, message: 'Organisation request accepted', request: wr });
+    res.json({ success: true, message: `Organisation request assigned to ${collector.name}`, request: wr });
   } catch (err) {
-    console.error('Error accepting organisation request:', err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    sendError(res, err, 'Server error');
   }
 });
 
@@ -144,7 +196,6 @@ router.post('/organisation-requests/:id/reject', async (req, res) => {
 
     res.json({ success: true, message: 'Organisation request rejected', request: wr });
   } catch (err) {
-    console.error('Error rejecting organisation request:', err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    sendError(res, err, 'Server error');
   }
 });

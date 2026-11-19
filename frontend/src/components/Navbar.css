@@ -763,12 +763,50 @@
     max-width: 300px;
   }
   
-  .navbar-brand {
-    font-size: 1.1rem;
+  /* Keep brand, Login/Register and the icons inside a 375px screen */
+  .navbar-janatha {
+    padding: 0.6rem 0.75rem;
   }
-  
+
+  .navbar-brand {
+    font-size: 0.95rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .navbar-content .auth-buttons {
+    gap: 0.35rem;
+  }
+
+  /* More specific than the global .login-btn/.register-btn sizes in index.css */
+  .auth-buttons .nav-link.login-btn,
+  .auth-buttons .nav-link.register-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    letter-spacing: 0;
+  }
+
+  .user-section {
+    gap: 0.4rem;
+  }
+
+  .notification-btn,
+  .profile-btn {
+    width: 36px;
+    height: 36px;
+  }
+
   .brand-icon {
     font-size: 1.4rem;
+  }
+}
+
+/* Very small phones (320px): let the brand name truncate so the buttons stay visible */
+@media (max-width: 360px) {
+  .navbar-brand {
+    max-width: 120px;
   }
 }
 

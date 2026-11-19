@@ -42,7 +42,7 @@ const productSchema = new mongoose.Schema({
     productImage: {
         type: String,
         required: [true, 'Product image URL is required.'],
-        default: 'https://img10.hotstar.com/image/upload/f_auto,h_156/sources/r1/cms/prod/1661/1371661-t-a4a551a85a80'
+        default: 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=500'
     },
     slug: {
         type: String,

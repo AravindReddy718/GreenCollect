@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import './UserDashboard.css';
 import { API_BASE_URL } from '../services/api';
+import type { User } from '../contexts/AuthContext';
 import {
     FaTrash, FaTruck, FaCheckCircle,
     FaCalendar, FaMapMarkerAlt, FaChevronRight, FaSearch,
@@ -50,7 +51,6 @@ interface ChartData {
 interface LeaderboardUser {
     _id: string;
     name: string;
-    email: string;
     points: number;
 }
 
@@ -59,7 +59,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [mounted, setMounted] = useState(false);
-    const [user, setUser] = useState<any>(null);
+    const [user, setUser] = useState<User | null>(null);
     const [pickups, setPickups] = useState<PickupRequest[]>([]);
     const [loading, setLoading] = useState(false);
     const [stats, setStats] = useState({
@@ -89,7 +89,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                 if (userData) {
                     const parsedUser = JSON.parse(userData);
                     setUser(parsedUser);
-                    console.log('UserDashboard loaded user:', parsedUser);
                 }
             } catch (error) {
                 console.error('Error loading user data in UserDashboard:', error);
@@ -110,6 +109,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
         if (activeTab === 'leaderboard') {
             fetchLeaderboard();
         }
+        // Refetch only when the tab changes; the fetch helpers are recreated each render
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab]);
 
     const fetchUserPickups = async () => {
@@ -118,7 +119,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
             
             if (!token) {
-                console.log('No token found');
                 return;
             }
 
@@ -140,9 +140,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                 generateChartData(data.requests);
                 
                 // Calculate real stats from user data
-                const completedPickups = data.requests.filter((p: any) => p.status === 'completed');
-                const totalWaste = completedPickups.reduce((sum: number, pickup: any) => sum + pickup.estimatedWeight, 0);
-                const activeRequests = data.requests.filter((p: any) => 
+                const completedPickups = data.requests.filter((p: PickupRequest) => p.status === 'completed');
+                const totalWaste = completedPickups.reduce((sum: number, pickup: PickupRequest) => sum + pickup.estimatedWeight, 0);
+                const activeRequests = data.requests.filter((p: PickupRequest) => 
                     ['pending', 'accepted', 'in-progress'].includes(p.status)
                 ).length;
 
@@ -153,8 +153,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                     totalCoins: user?.points || 0
                 });
             }
-        } catch (err: any) {
-            console.error('❌ Error fetching pickups:', err);
+        } catch (err) {
+            console.error('Error fetching pickups:', err);
         } finally {
             setLoading(false);
         }
@@ -166,11 +166,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
             
             if (!token) {
-                console.log('No token found for leaderboard');
                 return;
             }
 
-            console.log('🔄 Fetching leaderboard from backend...');
             const response = await fetch(`${API_BASE_URL}/api/users/leaderboard`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -178,7 +176,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                 }
             });
 
-            console.log('📡 Leaderboard response status:', response.status);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -187,27 +184,22 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
             }
 
             const data = await response.json();
-            console.log('✅ Leaderboard data received:', data);
             
             if (data.success && data.leaderboard) {
-                console.log(`📊 Leaderboard has ${data.leaderboard.length} users`);
                 // Filter out users without names and ensure they have all required fields
-                const validUsers = data.leaderboard.filter((u: any) => u.name && u.name.trim() !== '');
-                console.log(`✅ Valid users with names: ${validUsers.length}`);
+                const validUsers = data.leaderboard.filter((u: LeaderboardUser) => u.name && u.name.trim() !== '');
                 
                 // Sort by points in descending order (highest coins first)
                 const sortedUsers = validUsers.sort((a: LeaderboardUser, b: LeaderboardUser) => {
                     return b.points - a.points;
                 });
-                console.log('🔢 Top 3 users by coins:', sortedUsers.slice(0, 3).map((u: LeaderboardUser) => `${u.name}: ${u.points}`));
                 
                 setLeaderboard(sortedUsers);
             } else {
                 console.warn('⚠️ Leaderboard response format unexpected:', data);
             }
-        } catch (err: any) {
-            console.error('❌ Error fetching leaderboard:', err);
-            console.error('Error details:', err.message);
+        } catch (err) {
+            console.error('Error fetching leaderboard:', err);
         } finally {
             setLeaderboardLoading(false);
         }
@@ -441,7 +433,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                     <h3>{stats.totalPickups}</h3>
                     <p>Total Pickups</p>
                     <span className="stat-trend positive">
-                        {stats.totalPickups > 0 ? '+15% growth' : 'Schedule your first pickup'}
+                        {stats.totalPickups > 0 ? 'Keep it up!' : 'Schedule your first pickup'}
                     </span>
                 </div>
                 <div className="stat-glow"></div>
@@ -585,7 +577,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                                 innerRadius={60}
                                 outerRadius={100}
                                 paddingAngle={2}
-                                label={({ name, percent }: any) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
+                                label={({ name, percent }: { name?: string; percent?: number }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
                             >
                                 {chartData.wasteTypesData.map((entry, index) => (
                                     <Cell key={`cell-${index}`} fill={entry.color} />
@@ -1193,10 +1185,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({ activeTab, onTabChange })
                         </div>
                         <div className="modal-content">
                             <h2 className="modal-user-name">{selectedUser.name}</h2>
-                            <div className="modal-user-email">
-                                <FaEnvelope className="email-icon" />
-                                {selectedUser.email}
-                            </div>
                             <div className="modal-stats">
                                 <div className="modal-stat-card">
                                     <FaCoins className="modal-stat-icon coins" />

@@ -4,12 +4,38 @@ const { authMiddleware, requireRole } = require('../middleware/auth');
 const WasteRequest = require('../models/WasteRequest');
 const User = require('../models/Users');
 const CollectorActivity = require('../models/CollectorActivity');
+const Notification = require('../models/Notification');
+const { sendError } = require('../utils/sendError');
+const { isValidEmail } = require('../utils/validation');
+
+// Validates a pickup date: must parse, must not be before today and must be within 90 days.
+// Returns an error message or null.
+function pickupDateError(pickupDate) {
+  const when = new Date(pickupDate);
+  if (Number.isNaN(when.getTime())) return 'Invalid pickup date';
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  // Date-only strings parse as UTC midnight; compare on the calendar date
+  const day = new Date(when.getUTCFullYear(), when.getUTCMonth(), when.getUTCDate());
+  if (day < startOfToday) return 'Pickup date cannot be in the past';
+  if (day > new Date(startOfToday.getTime() + MAX_DAYS_AHEAD * 86400000)) {
+    return `Pickup date must be within ${MAX_DAYS_AHEAD} days`;
+  }
+  return null;
+}
+
+const MAX_DAYS_AHEAD = 90;
+const MAX_ADDRESS_LENGTH = 300;
+const MAX_INSTRUCTIONS_LENGTH = 500;
+const MAX_PICKUP_WEIGHT_KG = 100;
+const MAX_ORGANISATION_WEIGHT_KG = 10000;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
 // Helper function to calculate coins value
 function calculateCoinsValue(weight, wasteType) {
   const baseValue = weight * 10;
   let multiplier = 1;
-  
+
   switch (wasteType.toLowerCase()) {
     case 'electronics':
       multiplier = 1.5;
@@ -26,29 +52,75 @@ function calculateCoinsValue(weight, wasteType) {
     default:
       multiplier = 1;
   }
-  
+
   return Math.round(baseValue * multiplier);
 }
 
+// Notifications are a nice-to-have: never fail the main action because one could not be stored
+async function notifyUser(userId, message, type = 'info') {
+  if (!userId) return;
+  try {
+    await Notification.create({ userId, message, type });
+  } catch (err) {
+    console.error('Could not create notification:', err.message);
+  }
+}
+
+// Shape used by the user-facing request lists
+function formatUserRequest(request) {
+  return {
+    _id: request._id,
+    userId: {
+      _id: request.user._id,
+      name: request.user.name,
+      email: request.user.email,
+      phone: request.user.phone || 'Not provided'
+    },
+    pickupAddress: request.pickupAddress,
+    wasteType: request.wasteType,
+    estimatedWeight: request.estimatedWeight,
+    pickupDate: request.pickupDate.toISOString().split('T')[0],
+    pickupTime: request.pickupTime,
+    status: request.collectorStatus,
+    priority: request.priority || 'medium',
+    instructions: request.instructions,
+    coinsValue: calculateCoinsValue(request.estimatedWeight, request.wasteType),
+    createdAt: request.createdAt,
+    collectorId: request.assignedCollector?._id,
+    assignedCollector: request.assignedCollector ? {
+      _id: request.assignedCollector._id,
+      name: request.assignedCollector.name,
+      email: request.assignedCollector.email
+    } : undefined
+  };
+}
+
 // @route   GET /api/waste-requests
-// @desc    Get waste requests with filters (for collectors)
-// @access  Private (Collectors only)
+// @desc    Collectors: pending requests (minus ones they rejected) and their own requests.
+//          Admins: every request.
+// @access  Private (Collectors and admins)
 router.get('/', authMiddleware, requireRole(['collector', 'admin']), async (req, res) => {
   try {
     const { status } = req.query;
     const collectorId = req.user.id;
-    
-    let query = {};
-    
-    // Build query based on parameters
+    const isAdmin = req.user.role === 'admin';
+
+    const query = {};
     if (status && status !== 'all') {
-      query.collectorStatus = status;
-    } else {
-      // For collectors, show pending requests and their accepted requests
+      query.collectorStatus = String(status);
+      // Collectors only see other collectors' requests while they are still pending
+      if (!isAdmin && status !== 'pending') query.assignedCollector = collectorId;
+    } else if (!isAdmin) {
       query.$or = [
         { collectorStatus: 'pending' },
         { assignedCollector: collectorId }
       ];
+    }
+
+    if (!isAdmin) {
+      // A collector's rejection hides the request from that collector only
+      const rejectedIds = await CollectorActivity.distinct('wasteRequestId', { collectorId, status: 'rejected' });
+      if (rejectedIds.length) query._id = { $nin: rejectedIds };
     }
 
     const requests = await WasteRequest.find(query)
@@ -88,13 +160,8 @@ router.get('/', authMiddleware, requireRole(['collector', 'admin']), async (req,
     });
 
     res.status(200).json(formattedRequests);
-
   } catch (error) {
-    console.error('Error fetching waste requests:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while fetching requests' 
-    });
+    sendError(res, error, 'Server error while fetching requests');
   }
 });
 
@@ -103,57 +170,20 @@ router.get('/', authMiddleware, requireRole(['collector', 'admin']), async (req,
 // @access  Private
 router.get('/my-requests', authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.id;
-    
-    console.log('🔧 Fetching requests for user:', userId);
-
-    const userRequests = await WasteRequest.find({ user: userId })
+    const userRequests = await WasteRequest.find({ user: req.user.id })
       .populate('user', 'name email phone')
       .populate('assignedCollector', 'name email')
       .sort({ createdAt: -1 });
 
-    console.log(`✅ Found ${userRequests.length} requests for user ${userId}`);
-
-    // Format the response to match frontend expectations
-    const formattedRequests = userRequests.map(request => ({
-      _id: request._id,
-      userId: {
-        _id: request.user._id,
-        name: request.user.name,
-        email: request.user.email,
-        phone: request.user.phone || 'Not provided'
-      },
-      pickupAddress: request.pickupAddress,
-      wasteType: request.wasteType,
-      estimatedWeight: request.estimatedWeight,
-      pickupDate: request.pickupDate.toISOString().split('T')[0],
-      pickupTime: request.pickupTime,
-      status: request.collectorStatus,
-      priority: request.priority || 'medium',
-      instructions: request.instructions,
-      coinsValue: calculateCoinsValue(request.estimatedWeight, request.wasteType),
-      createdAt: request.createdAt,
-      collectorId: request.assignedCollector?._id,
-      assignedCollector: request.assignedCollector ? {
-        _id: request.assignedCollector._id,
-        name: request.assignedCollector.name,
-        email: request.assignedCollector.email
-      } : undefined
-    }));
+    const formattedRequests = userRequests.map(formatUserRequest);
 
     res.status(200).json({
       success: true,
       count: formattedRequests.length,
       requests: formattedRequests
     });
-
   } catch (error) {
-    console.error('❌ Error fetching user requests:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while fetching requests',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while fetching requests');
   }
 });
 
@@ -176,26 +206,42 @@ router.post('/', authMiddleware, async (req, res) => {
 
     // Validation
     if (!pickupDate || !pickupTime || !wasteType || !estimatedWeight || !pickupAddress) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'All required fields must be filled' 
+      return res.status(400).json({
+        success: false,
+        message: 'All required fields must be filled'
       });
     }
 
-    // Validate weight is a positive number
     const weight = parseFloat(estimatedWeight);
-    if (isNaN(weight) || weight <= 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Estimated weight must be a positive number' 
+    if (isNaN(weight) || weight <= 0 || weight > MAX_PICKUP_WEIGHT_KG) {
+      return res.status(400).json({
+        success: false,
+        message: `Estimated weight must be between 0 and ${MAX_PICKUP_WEIGHT_KG} kg`
       });
     }
 
-    const user = await User.findById(userId);
+    const dateError = pickupDateError(pickupDate);
+    if (dateError) {
+      return res.status(400).json({ success: false, message: dateError });
+    }
+
+    if (!TIME_RE.test(String(pickupTime))) {
+      return res.status(400).json({ success: false, message: 'Invalid pickup time' });
+    }
+
+    if (typeof pickupAddress !== 'string' || !pickupAddress.trim() || pickupAddress.length > MAX_ADDRESS_LENGTH) {
+      return res.status(400).json({ success: false, message: `Pickup address must be 1-${MAX_ADDRESS_LENGTH} characters` });
+    }
+
+    if (instructions && String(instructions).length > MAX_INSTRUCTIONS_LENGTH) {
+      return res.status(400).json({ success: false, message: `Instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters` });
+    }
+
+    const user = await User.findById(userId).select('name email');
     if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
       });
     }
 
@@ -215,13 +261,7 @@ router.post('/', authMiddleware, async (req, res) => {
     const savedRequest = await newRequest.save();
 
     // Add to user's wasteRequests array
-    if (!user.wasteRequests) {
-      user.wasteRequests = [];
-    }
-    user.wasteRequests.push(savedRequest._id);
-    await user.save();
-
-    await savedRequest.populate('user', 'name email');
+    await User.updateOne({ _id: userId }, { $push: { wasteRequests: savedRequest._id } });
 
     res.status(201).json({
       success: true,
@@ -236,19 +276,13 @@ router.post('/', authMiddleware, async (req, res) => {
         contactNumber: savedRequest.contactNumber,
         instructions: savedRequest.instructions,
         status: savedRequest.collectorStatus,
-        userName: savedRequest.user.name,
-        userEmail: savedRequest.user.email,
+        userName: user.name,
+        userEmail: user.email,
         coinsValue: calculateCoinsValue(savedRequest.estimatedWeight, savedRequest.wasteType)
       }
     });
-
   } catch (error) {
-    console.error('Error creating waste request:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while scheduling pickup',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while scheduling pickup');
   }
 });
 
@@ -276,7 +310,24 @@ router.post('/organisation', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing required organisation fields' });
     }
 
+    const dateError = pickupDateError(pickupDate);
+    if (dateError) {
+      return res.status(400).json({ success: false, message: dateError });
+    }
+
+    if (typeof pickupAddress !== 'string' || pickupAddress.length > MAX_ADDRESS_LENGTH) {
+      return res.status(400).json({ success: false, message: `Pickup address must be at most ${MAX_ADDRESS_LENGTH} characters` });
+    }
+
+    if (contactEmail && !isValidEmail(contactEmail)) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid contact email' });
+    }
+
     const weight = parseFloat(estimatedWeight) || 0;
+    if (weight < 0 || weight > MAX_ORGANISATION_WEIGHT_KG) {
+      return res.status(400).json({ success: false, message: `Estimated weight must be 0-${MAX_ORGANISATION_WEIGHT_KG} kg` });
+    }
+
     // Normalize wasteTypes and pick a primary wasteType compatible with schema enum
     const normalizedWasteTypes = Array.isArray(wasteTypes)
       ? wasteTypes.map(s => String(s).trim().toLowerCase())
@@ -310,10 +361,8 @@ router.post('/organisation', async (req, res) => {
       message: 'Organisation collection request submitted successfully',
       request: savedRequest
     });
-
   } catch (error) {
-    console.error('Error creating organisation waste request:', error);
-    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    sendError(res, error, 'Server error while submitting organisation request');
   }
 });
 
@@ -325,124 +374,80 @@ router.put('/:requestId/accept', authMiddleware, requireRole(['collector']), asy
     const { requestId } = req.params;
     const collectorId = req.user.id;
 
-    console.log('🔧 Accepting request debug:');
-    console.log('Request ID:', requestId);
-    console.log('Collector ID:', collectorId);
+    // Atomic: only one collector can move a request out of "pending"
+    const updatedRequest = await WasteRequest.findOneAndUpdate(
+      { _id: requestId, collectorStatus: 'pending' },
+      { $set: { collectorStatus: 'accepted', assignedCollector: collectorId, collectionStatus: 'not_collected' } },
+      { new: true }
+    )
+      .populate('user', 'name email phone')
+      .populate('assignedCollector', 'name email');
 
-    const request = await WasteRequest.findById(requestId);
-
-    if (!request) {
-      console.log('❌ Request not found');
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Waste request not found' 
-      });
+    if (!updatedRequest) {
+      const existing = await WasteRequest.findById(requestId).select('collectorStatus');
+      if (!existing) {
+        return res.status(404).json({ success: false, message: 'Waste request not found' });
+      }
+      return res.status(400).json({ success: false, message: `Request already ${existing.collectorStatus}` });
     }
 
-    console.log('📋 Request details before accept:', {
-      id: request._id,
-      collectorStatus: request.collectorStatus,
-      assignedCollector: request.assignedCollector
-    });
-
-    if (request.collectorStatus !== 'pending') {
-      console.log('❌ Invalid status for acceptance');
-      return res.status(400).json({ 
-        success: false, 
-        message: `Request already ${request.collectorStatus}` 
-      });
-    }
-
-    // Update request status
-    request.collectorStatus = 'accepted';
-    request.assignedCollector = collectorId;
-    request.collectionStatus = 'not_collected';
-    
-    const updatedRequest = await request.save();
-    
-    // Populate after saving
-    await updatedRequest.populate('user', 'name email phone');
-    await updatedRequest.populate('assignedCollector', 'name email');
-
-    console.log('✅ Request accepted successfully');
-    console.log('📋 Request details after accept:', {
-      id: updatedRequest._id,
-      collectorStatus: updatedRequest.collectorStatus,
-      assignedCollector: updatedRequest.assignedCollector,
-      assignedCollectorId: updatedRequest.assignedCollector?._id?.toString()
-    });
-
-    // Log collector activity
     await CollectorActivity.create({
       collectorId,
       wasteRequestId: requestId,
       status: 'accepted'
     });
 
+    await notifyUser(updatedRequest.user?._id, `Your pickup request was accepted by ${req.user.name}.`, 'success');
+
     res.status(200).json({
       success: true,
       message: 'Waste request accepted successfully',
       request: updatedRequest
     });
-
   } catch (error) {
-    console.error('❌ Error accepting request:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while accepting request',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while accepting request');
   }
 });
 
 // @route   PUT /api/waste-requests/:requestId/reject
-// @desc    Collector rejects a waste request
+// @desc    Collector declines a pending request. It stays pending for other collectors.
 // @access  Private (Collectors only)
 router.put('/:requestId/reject', authMiddleware, requireRole(['collector']), async (req, res) => {
   try {
     const { requestId } = req.params;
     const collectorId = req.user.id;
 
-    const request = await WasteRequest.findById(requestId);
+    const request = await WasteRequest.findById(requestId).populate('user', 'name email phone');
     if (!request) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Waste request not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Waste request not found'
       });
     }
 
     if (request.collectorStatus !== 'pending') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Request already ${request.collectorStatus}` 
+      return res.status(400).json({
+        success: false,
+        message: `Request already ${request.collectorStatus}`
       });
     }
 
-    request.collectorStatus = 'rejected';
-    const updatedRequest = await request.save();
-
-    await updatedRequest.populate('user', 'name email phone');
-
-    // Log collector activity
-    await CollectorActivity.create({
-      collectorId,
-      wasteRequestId: requestId,
-      status: 'rejected'
-    });
+    const alreadyRejected = await CollectorActivity.exists({ collectorId, wasteRequestId: requestId, status: 'rejected' });
+    if (!alreadyRejected) {
+      await CollectorActivity.create({
+        collectorId,
+        wasteRequestId: requestId,
+        status: 'rejected'
+      });
+    }
 
     res.status(200).json({
       success: true,
       message: 'Waste request rejected successfully',
-      request: updatedRequest
+      request
     });
-
   } catch (error) {
-    console.error('Error rejecting request:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while rejecting request',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while rejecting request');
   }
 });
 
@@ -454,78 +459,28 @@ router.put('/:requestId/start', authMiddleware, requireRole(['collector']), asyn
     const { requestId } = req.params;
     const collectorId = req.user.id;
 
-    console.log('🔧 Starting pickup debug:');
-    console.log('Request ID:', requestId);
-    console.log('Collector ID:', collectorId);
-
-    const request = await WasteRequest.findById(requestId)
+    const updatedRequest = await WasteRequest.findOneAndUpdate(
+      { _id: requestId, assignedCollector: collectorId, collectorStatus: 'accepted' },
+      { $set: { collectorStatus: 'in-progress', collectionStatus: 'in_progress' } },
+      { new: true }
+    )
       .populate('user', 'name email phone')
       .populate('assignedCollector', 'name email');
 
-    if (!request) {
-      console.log('❌ Request not found');
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Waste request not found' 
+    if (!updatedRequest) {
+      const existing = await WasteRequest.findById(requestId).select('assignedCollector collectorStatus');
+      if (!existing) {
+        return res.status(404).json({ success: false, message: 'Waste request not found' });
+      }
+      if (!existing.assignedCollector || existing.assignedCollector.toString() !== collectorId) {
+        return res.status(403).json({ success: false, message: 'Not authorized to start this pickup' });
+      }
+      return res.status(400).json({
+        success: false,
+        message: `Cannot start pickup - request status is "${existing.collectorStatus}" but should be "accepted"`
       });
     }
 
-    console.log('📋 Request details:', {
-      id: request._id,
-      collectorStatus: request.collectorStatus,
-      collectionStatus: request.collectionStatus,
-      assignedCollector: request.assignedCollector,
-      assignedCollectorId: request.assignedCollector?._id?.toString(),
-      currentUser: collectorId
-    });
-
-    // Check if this collector owns the request
-    if (!request.assignedCollector) {
-      console.log('❌ No collector assigned to this request');
-      return res.status(403).json({ 
-        success: false, 
-        message: 'No collector assigned to this request' 
-      });
-    }
-
-    // Convert both to strings for comparison to avoid ObjectId vs string issues
-    const assignedCollectorId = request.assignedCollector._id ? 
-      request.assignedCollector._id.toString() : 
-      request.assignedCollector.toString();
-    
-    const currentCollectorId = collectorId.toString();
-
-    console.log('🔍 ID Comparison:', {
-      assignedCollectorId,
-      currentCollectorId,
-      match: assignedCollectorId === currentCollectorId
-    });
-
-    if (assignedCollectorId !== currentCollectorId) {
-      console.log('❌ Collector authorization failed - ID mismatch');
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Not authorized to start this pickup' 
-      });
-    }
-
-    // Check if request is in correct status
-    if (request.collectorStatus !== 'accepted') {
-      console.log('❌ Invalid status for starting pickup');
-      return res.status(400).json({ 
-        success: false, 
-        message: `Cannot start pickup - request status is "${request.collectorStatus}" but should be "accepted"` 
-      });
-    }
-
-    // Update request status
-    request.collectorStatus = 'in-progress';
-    request.collectionStatus = 'in_progress';
-    
-    const updatedRequest = await request.save();
-    console.log('✅ Pickup started successfully');
-
-    // Log collector activity
     await CollectorActivity.create({
       collectorId,
       wasteRequestId: requestId,
@@ -543,14 +498,8 @@ router.put('/:requestId/start', authMiddleware, requireRole(['collector']), asyn
         assignedCollector: updatedRequest.assignedCollector
       }
     });
-
   } catch (error) {
-    console.error('❌ Error starting pickup:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while starting pickup',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while starting pickup');
   }
 });
 
@@ -562,95 +511,60 @@ router.put('/:requestId/complete', authMiddleware, requireRole(['collector']), a
     const { requestId } = req.params;
     const collectorId = req.user.id;
 
-    console.log('🔧 Completing pickup debug:');
-    console.log('Request ID:', requestId);
-    console.log('Collector ID:', collectorId);
+    // Atomic: a pickup can only be completed (and paid) once, even on a double-click
+    const updatedRequest = await WasteRequest.findOneAndUpdate(
+      { _id: requestId, assignedCollector: collectorId, collectorStatus: 'in-progress' },
+      { $set: { collectorStatus: 'completed', collectionStatus: 'collected', collectedAt: new Date() } },
+      { new: true }
+    );
 
-    const request = await WasteRequest.findById(requestId);
-    if (!request) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Waste request not found' 
+    if (!updatedRequest) {
+      const existing = await WasteRequest.findById(requestId).select('assignedCollector collectorStatus');
+      if (!existing) {
+        return res.status(404).json({ success: false, message: 'Waste request not found' });
+      }
+      if (!existing.assignedCollector || existing.assignedCollector.toString() !== collectorId) {
+        return res.status(403).json({ success: false, message: 'Not authorized to complete this pickup' });
+      }
+      return res.status(400).json({
+        success: false,
+        message: `Cannot complete pickup - request is ${existing.collectorStatus}`
       });
     }
 
-    // Convert both to strings for comparison
-    const assignedCollectorId = request.assignedCollector ? 
-      request.assignedCollector.toString() : null;
-    
-    const currentCollectorId = collectorId.toString();
+    const coinsEarned = calculateCoinsValue(updatedRequest.estimatedWeight, updatedRequest.wasteType);
 
-    if (assignedCollectorId !== currentCollectorId) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Not authorized to complete this pickup' 
-      });
-    }
-
-    if (request.collectorStatus !== 'in-progress') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Cannot complete pickup - request is ${request.collectorStatus}` 
-      });
-    }
-
-    // Calculate coins based on weight and waste type
-    const coinsEarned = calculateCoinsValue(request.estimatedWeight, request.wasteType);
-
-    // Update request status
-    request.collectorStatus = 'completed';
-    request.collectionStatus = 'collected';
-    request.collectedAt = new Date();
-    request.coinsAwarded = coinsEarned; // Store how many coins were awarded
-    
-    const updatedRequest = await request.save();
-
-    // Log collector activity
     await CollectorActivity.create({
       collectorId,
       wasteRequestId: requestId,
       status: 'completed'
     });
 
-    // Award coins to user
-    const user = await User.findById(request.user);
-    if (user) {
-      // Ensure points field exists and add the earned coins
-      user.points = (user.points || 0) + coinsEarned;
-      
-      // Add to user's completed pickups
-      if (!user.completedPickups) {
-        user.completedPickups = [];
-      }
-      user.completedPickups.push({
-        requestId: request._id,
-        completedAt: new Date(),
-        coinsEarned: coinsEarned,
-        wasteType: request.wasteType,
-        weight: request.estimatedWeight
+    if (updatedRequest.user) {
+      // $inc is atomic, so simultaneous completions for the same user never lose coins
+      await User.updateOne({ _id: updatedRequest.user }, {
+        $inc: { points: coinsEarned },
+        $push: {
+          completedPickups: {
+            requestId: updatedRequest._id,
+            completedAt: new Date(),
+            coinsEarned,
+            wasteType: updatedRequest.wasteType,
+            weight: updatedRequest.estimatedWeight
+          }
+        }
       });
-
-      // Save without validation to avoid collectorInfo validation errors
-      await user.save({ validateBeforeSave: false });
-      
-      console.log(`✅ Awarded ${coinsEarned} coins to user: ${user.name}`);
-      
+      await notifyUser(updatedRequest.user, `Pickup completed! You earned ${coinsEarned} coins.`, 'success');
     }
 
     res.status(200).json({
       success: true,
       message: 'Pickup completed successfully',
       request: updatedRequest,
-      coinsEarned: coinsEarned
+      coinsEarned
     });
-
   } catch (error) {
-    console.error('❌ Error completing pickup:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while completing pickup',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while completing pickup');
   }
 });
 
@@ -662,124 +576,76 @@ router.put('/:requestId/cancel', authMiddleware, async (req, res) => {
     const { requestId } = req.params;
     const userId = req.user.id;
 
-    const request = await WasteRequest.findById(requestId);
-    if (!request) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Waste request not found' 
+    // Atomic: cannot overwrite a request a collector accepted at the same moment
+    const updatedRequest = await WasteRequest.findOneAndUpdate(
+      { _id: requestId, user: userId, collectorStatus: 'pending' },
+      { $set: { collectorStatus: 'cancelled' } },
+      { new: true }
+    );
+
+    if (!updatedRequest) {
+      const existing = await WasteRequest.findById(requestId).select('user collectorStatus');
+      if (!existing) {
+        return res.status(404).json({ success: false, message: 'Waste request not found' });
+      }
+      if (!existing.user) {
+        return res.status(403).json({ success: false, message: 'Cannot cancel organisation requests from user account' });
+      }
+      if (existing.user.toString() !== userId) {
+        return res.status(403).json({ success: false, message: 'Not authorized to cancel this request' });
+      }
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel request - request is already ${existing.collectorStatus}`
       });
     }
-
-    // Check if user owns this request
-    if (!request.user) {
-      return res.status(403).json({ success: false, message: 'Cannot cancel organisation requests from user account' });
-    }
-
-    if (request.user.toString() !== userId) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Not authorized to cancel this request' 
-      });
-    }
-
-    // Only allow cancellation if request is still pending
-    if (request.collectorStatus !== 'pending') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Cannot cancel request - request is already ${request.collectorStatus}` 
-      });
-    }
-
-    request.collectorStatus = 'cancelled';
-    const updatedRequest = await request.save();
 
     res.status(200).json({
       success: true,
       message: 'Pickup request cancelled successfully',
       request: updatedRequest
     });
-
   } catch (error) {
-    console.error('Error cancelling request:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while cancelling request',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while cancelling request');
   }
 });
 
 // @route   GET /api/waste-requests/user/:userId
 // @desc    Get waste requests for a specific user
-// @access  Private
+// @access  Private (the user themselves, admins, or collectors for requests assigned to them)
 router.get('/user/:userId', authMiddleware, async (req, res) => {
   try {
     const { userId } = req.params;
     const currentUserId = req.user.id;
     const currentUserRole = req.user.role;
 
-    console.log('🔧 Fetching user requests:', {
-      requestedUserId: userId,
-      currentUserId: currentUserId,
-      currentUserRole: currentUserRole
-    });
-
-    // Check if user is accessing their own data or is admin/collector
     if (currentUserId !== userId && currentUserRole !== 'admin' && currentUserRole !== 'collector') {
-      console.log('❌ Access denied - user not authorized');
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Access denied. You can only view your own requests.' 
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only view your own requests.'
       });
     }
 
-    const userRequests = await WasteRequest.find({ user: userId })
+    const filter = { user: userId };
+    // Collectors only see the requests they are handling for this user
+    if (currentUserRole === 'collector' && currentUserId !== userId) {
+      filter.assignedCollector = currentUserId;
+    }
+
+    const userRequests = await WasteRequest.find(filter)
       .populate('user', 'name email phone')
       .populate('assignedCollector', 'name email')
       .sort({ createdAt: -1 });
 
-    console.log(`✅ Found ${userRequests.length} requests for user ${userId}`);
-
-    // Format the response to match frontend expectations
-    const formattedRequests = userRequests.map(request => ({
-      _id: request._id,
-      userId: {
-        _id: request.user._id,
-        name: request.user.name,
-        email: request.user.email,
-        phone: request.user.phone || 'Not provided'
-      },
-      pickupAddress: request.pickupAddress,
-      wasteType: request.wasteType,
-      estimatedWeight: request.estimatedWeight,
-      pickupDate: request.pickupDate.toISOString().split('T')[0],
-      pickupTime: request.pickupTime,
-      status: request.collectorStatus,
-      priority: request.priority || 'medium',
-      instructions: request.instructions,
-      coinsValue: calculateCoinsValue(request.estimatedWeight, request.wasteType),
-      createdAt: request.createdAt,
-      collectorId: request.assignedCollector?._id,
-      assignedCollector: request.assignedCollector ? {
-        _id: request.assignedCollector._id,
-        name: request.assignedCollector.name,
-        email: request.assignedCollector.email
-      } : undefined
-    }));
+    const formattedRequests = userRequests.map(formatUserRequest);
 
     res.status(200).json({
       success: true,
       count: formattedRequests.length,
       requests: formattedRequests
     });
-
   } catch (error) {
-    console.error('❌ Error fetching user requests:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while fetching user requests',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while fetching user requests');
   }
 });
 
@@ -811,7 +677,7 @@ router.get('/collector/stats', authMiddleware, requireRole(['collector']), async
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const todayRequests = await WasteRequest.countDocuments({
       assignedCollector: collectorId,
       pickupDate: {
@@ -829,14 +695,8 @@ router.get('/collector/stats', authMiddleware, requireRole(['collector']), async
         today: todayRequests
       }
     });
-
   } catch (error) {
-    console.error('Error getting collector stats:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while fetching collector stats',
-      error: error.message 
-    });
+    sendError(res, error, 'Server error while fetching collector stats');
   }
 });
 

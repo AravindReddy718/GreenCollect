@@ -3,15 +3,29 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const User = require('./models/Users');
+const { isValidEmail } = require('./utils/validation');
 
 const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
 const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS || '10');
 
 const createOrPromoteAdmin = async () => {
   const args = process.argv.slice(2);
-  const email = (args[0] || 'admin@janathagarage.com').toLowerCase().trim();
-  const password = args[1] || 'Admin@123';
+  if (!args[0] || !args[1]) {
+    console.error('Usage: npm run create-admin -- <email> <password> [name]');
+    process.exit(1);
+  }
+  const email = args[0].toLowerCase().trim();
+  const password = args[1];
   const name = args[2] || 'Admin User';
+
+  if (!isValidEmail(email)) {
+    console.error('❌ Please give a valid email address');
+    process.exit(1);
+  }
+  if (password.length < 8) {
+    console.error('❌ Password must be at least 8 characters');
+    process.exit(1);
+  }
 
   if (!MONGO_URI) {
     console.error('❌ MONGO_URI is missing in .env');
@@ -27,10 +41,7 @@ const createOrPromoteAdmin = async () => {
 
     if (existingUser) {
       existingUser.role = 'admin';
-      if (args[1]) {
-        // If password was explicitly provided, update it
-        existingUser.password = await bcrypt.hash(password, SALT_ROUNDS);
-      }
+      existingUser.password = await bcrypt.hash(password, SALT_ROUNDS);
       await existingUser.save({ validateBeforeSave: false });
       console.log(`\n🎉 User ${email} has been updated to role "admin"!`);
     } else {
@@ -47,12 +58,7 @@ const createOrPromoteAdmin = async () => {
       console.log(`\n🎉 New Admin account created successfully!`);
     }
 
-    console.log('------------------------------------------------');
-    console.log('🔑 ADMIN LOGIN CREDENTIALS:');
-    console.log(`   Email:    ${email}`);
-    console.log(`   Password: ${password}`);
-    console.log(`   Role:     admin`);
-    console.log('------------------------------------------------');
+    console.log(`🔑 Admin login: ${email} (use the password you just entered)`);
     console.log('\nYou can now log in at: http://localhost:5173/login\n');
 
     await mongoose.disconnect();

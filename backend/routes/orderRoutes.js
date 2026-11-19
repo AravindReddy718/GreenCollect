@@ -1,8 +1,42 @@
 const express = require('express');
+const crypto = require('crypto');
+const mongoose = require('mongoose');
 const router = express.Router();
 const Order = require('../models/Order');
 const User = require('../models/Users');
+const Product = require('../models/Products');
 const { authMiddleware } = require('../middleware/auth');
+const { sendError } = require('../utils/sendError');
+const { isValidEmail } = require('../utils/validation');
+
+const ADDRESS_FIELDS = ['fullName', 'phone', 'address', 'city', 'state', 'pincode'];
+
+// Returns an error message for an invalid delivery address, or null
+function addressError(address) {
+  if (!address || ADDRESS_FIELDS.some(f => typeof address[f] !== 'string' || !address[f].trim())) {
+    return 'All required delivery address fields must be provided';
+  }
+  if (!/^\+?\d{10,13}$/.test(address.phone.replace(/[\s()-]/g, ''))) {
+    return 'Enter a valid phone number (10-13 digits)';
+  }
+  if (!/^\d{6}$/.test(address.pincode.trim())) {
+    return 'Enter a valid 6-digit pincode';
+  }
+  if (address.address.length > 300 || address.fullName.length > 100 || address.city.length > 100 || address.state.length > 100) {
+    return 'Address fields are too long';
+  }
+  if (address.email && !isValidEmail(address.email)) {
+    return 'Enter a valid email address';
+  }
+  return null;
+}
+
+// Puts stock back for items already reserved by a failed order
+async function restoreStock(items) {
+  for (const it of items) {
+    await Product.updateOne({ _id: it.productId }, { $inc: { stockQuantity: it.qty } });
+  }
+}
 
 /**
  * POST /api/orders
@@ -13,39 +47,43 @@ router.post('/', authMiddleware, async (req, res) => {
     const userId = req.user.id;
     const { items, product, address, deliveryOption } = req.body;
 
-    // Normalise items list
-    let orderItems = [];
-    if (Array.isArray(items) && items.length > 0) {
-      orderItems = items.map(it => ({
-        productId: it.id && it.id.length === 24 ? it.id : undefined,
-        name: it.name || 'Eco Item',
-        price: Number(it.price) || 0,
-        qty: Number(it.qty) || 1,
-        image: it.image || ''
-      }));
-    } else if (product) {
-      orderItems = [{
-        productId: product.id && String(product.id).length === 24 ? product.id : undefined,
-        name: product.name || 'Eco Item',
-        price: Number(product.price) || 0,
-        qty: 1,
-        image: product.image || ''
-      }];
-    }
+    // Only product IDs and quantities come from the client; names and prices come from the database
+    const rawItems = Array.isArray(items) && items.length > 0
+      ? items
+      : (product ? [{ ...product, qty: 1 }] : []);
 
-    if (orderItems.length === 0) {
+    if (rawItems.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'No items provided for order'
       });
     }
 
-    // Validate address
-    if (!address || !address.fullName || !address.phone || !address.address || !address.city || !address.state || !address.pincode) {
-      return res.status(400).json({
-        success: false,
-        message: 'All required delivery address fields must be provided'
+    const orderItems = [];
+    for (const it of rawItems) {
+      const qty = Number(it && it.qty !== undefined ? it.qty : 1);
+      if (!it || !mongoose.isValidObjectId(it.id) || !Number.isInteger(qty) || qty < 1 || qty > 20) {
+        return res.status(400).json({ success: false, message: 'Invalid item in order' });
+      }
+      const dbProduct = await Product.findById(it.id).lean();
+      if (!dbProduct || dbProduct.isActive === false) {
+        return res.status(400).json({ success: false, message: 'A product in your order is no longer available' });
+      }
+      if (dbProduct.stockQuantity < qty) {
+        return res.status(400).json({ success: false, message: `${dbProduct.productName} is out of stock` });
+      }
+      orderItems.push({
+        productId: dbProduct._id,
+        name: dbProduct.productName,
+        price: Number(dbProduct.price) || 0,
+        qty,
+        image: dbProduct.productImage || ''
       });
+    }
+
+    const invalidAddress = addressError(address);
+    if (invalidAddress) {
+      return res.status(400).json({ success: false, message: invalidAddress });
     }
 
     const deliveryCost = deliveryOption === 'express' ? 25 : 0;
@@ -61,20 +99,37 @@ router.post('/', authMiddleware, async (req, res) => {
       });
     }
 
-    const userPoints = Number(user.points || 0);
-    if (userPoints < totalCost) {
+    // Atomic deduction: only succeeds if the balance still covers the total (no double-spend)
+    const updatedUser = await User.findOneAndUpdate(
+      { _id: userId, points: { $gte: totalCost } },
+      { $inc: { points: -totalCost } },
+      { new: true }
+    );
+    if (!updatedUser) {
+      const userPoints = Number(user.points || 0);
       return res.status(400).json({
         success: false,
         message: `Insufficient coins balance. You have ${userPoints} coins, but order requires ${totalCost} coins.`
       });
     }
 
-    // Deduct coins from user
-    user.points = userPoints - totalCost;
-    await user.save({ validateBeforeSave: false });
+    // Atomic stock reservation: never sells more than is in stock, even with simultaneous orders
+    const reserved = [];
+    for (const it of orderItems) {
+      const result = await Product.updateOne(
+        { _id: it.productId, stockQuantity: { $gte: it.qty } },
+        { $inc: { stockQuantity: -it.qty } }
+      );
+      if (result.modifiedCount !== 1) {
+        await restoreStock(reserved);
+        await User.updateOne({ _id: userId }, { $inc: { points: totalCost } });
+        return res.status(400).json({ success: false, message: `${it.name} just went out of stock` });
+      }
+      reserved.push(it);
+    }
 
-    // Generate unique order ID
-    const orderId = `GC-${Date.now().toString().slice(-8)}`;
+    // Unique order ID: timestamp plus random suffix, so two orders in the same millisecond cannot collide
+    const orderId = `GC-${Date.now().toString().slice(-8)}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
 
     const newOrder = new Order({
       orderId,
@@ -84,35 +139,37 @@ router.post('/', authMiddleware, async (req, res) => {
       deliveryOption: deliveryOption === 'express' ? 'express' : 'standard',
       deliveryCost,
       address: {
-        fullName: address.fullName,
-        phone: address.phone,
+        fullName: address.fullName.trim(),
+        phone: address.phone.trim(),
         email: address.email || user.email,
-        address: address.address,
-        city: address.city,
-        state: address.state,
-        pincode: address.pincode,
+        address: address.address.trim(),
+        city: address.city.trim(),
+        state: address.state.trim(),
+        pincode: address.pincode.trim(),
         country: address.country || 'India'
       },
       status: 'processing'
     });
 
-    const savedOrder = await newOrder.save();
+    let savedOrder;
+    try {
+      savedOrder = await newOrder.save();
+    } catch (saveErr) {
+      // Give the coins and stock back if the order could not be stored
+      await restoreStock(reserved);
+      await User.updateOne({ _id: userId }, { $inc: { points: totalCost } });
+      throw saveErr;
+    }
 
     res.status(201).json({
       success: true,
       message: 'Order placed successfully!',
       order: savedOrder,
       orderId: savedOrder.orderId,
-      remainingCoins: user.points
+      remainingCoins: updatedUser.points
     });
-
   } catch (error) {
-    console.error('Error creating order:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while placing order',
-      error: error.message
-    });
+    sendError(res, error, 'Server error while placing order');
   }
 });
 
@@ -122,8 +179,7 @@ router.post('/', authMiddleware, async (req, res) => {
  */
 router.get('/my-orders', authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const orders = await Order.find({ user: userId })
+    const orders = await Order.find({ user: req.user.id })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -132,22 +188,17 @@ router.get('/my-orders', authMiddleware, async (req, res) => {
       orders
     });
   } catch (error) {
-    console.error('Error fetching orders:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while fetching orders',
-      error: error.message
-    });
+    sendError(res, error, 'Server error while fetching orders');
   }
 });
 
 /**
  * GET /api/orders/:orderId
- * Get specific order by orderId
+ * Get specific order by orderId (only the owner can read it)
  */
 router.get('/:orderId', authMiddleware, async (req, res) => {
   try {
-    const order = await Order.findOne({ orderId: req.params.orderId }).lean();
+    const order = await Order.findOne({ orderId: req.params.orderId, user: req.user.id }).lean();
     if (!order) {
       return res.status(404).json({
         success: false,
@@ -160,14 +211,8 @@ router.get('/:orderId', authMiddleware, async (req, res) => {
       order
     });
   } catch (error) {
-    console.error('Error fetching order:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    sendError(res, error, 'Server error while fetching order');
   }
 });
 
 module.exports = router;
-

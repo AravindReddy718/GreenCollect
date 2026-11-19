@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/Users');
+const { authMiddleware, requireRole } = require('../middleware/auth');
+const { sendError } = require('../utils/sendError');
+
+const adminOnly = [authMiddleware, requireRole(['admin'])];
 
 // PUT /api/users/approve-collector/:id
-router.put('/approve-collector/:id', async (req, res) => {
+router.put('/approve-collector/:id', adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
     const { isApproved } = req.body;
@@ -44,8 +48,7 @@ router.put('/approve-collector/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error approving collector:', error);
-    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    sendError(res, error, 'Server error');
   }
 });
 
@@ -53,6 +56,9 @@ router.put('/approve-collector/:id', async (req, res) => {
 const updatePointsHandler = async (req, res) => {
   try {
     const change = Number(req.body.coinsChange ?? req.body.pointsChange ?? req.body.amount ?? 0);
+    if (!Number.isFinite(change)) {
+      return res.status(400).json({ success: false, message: 'coinsChange must be a number' });
+    }
     const user = await User.findById(req.params.id);
 
     if (!user) {
@@ -71,19 +77,18 @@ const updatePointsHandler = async (req, res) => {
       coins: user.points
     });
   } catch (error) {
-    console.error('Error updating points:', error);
-    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    sendError(res, error, 'Server error');
   }
 };
 
-router.patch('/:id/coins', updatePointsHandler);
-router.patch('/:id/points', updatePointsHandler);
+router.patch('/:id/coins', adminOnly, updatePointsHandler);
+router.patch('/:id/points', adminOnly, updatePointsHandler);
 
 // GET /api/users/leaderboard - all users sorted by points (descending)
 router.get('/leaderboard', async (req, res) => {
   try {
     const users = await User.find({ role: 'user' })
-      .select('name email points createdAt')
+      .select('name points createdAt')
       .sort({ points: -1 })
       .limit(50)
       .lean();
@@ -93,8 +98,7 @@ router.get('/leaderboard', async (req, res) => {
       leaderboard: users
     });
   } catch (error) {
-    console.error('Error fetching leaderboard:', error);
-    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    sendError(res, error, 'Server error');
   }
 });
 

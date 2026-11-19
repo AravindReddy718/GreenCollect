@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FaTrash, FaCoins } from 'react-icons/fa';
 import { useCart } from '../contexts/CartContext';
@@ -9,7 +9,7 @@ const Cart: React.FC = () => {
   const navigate = useNavigate();
   // ordering state not required since checkout is handed to RedeemCheckout
 
-  const total = useMemo(() => totalCoins(), [items]);
+  const total = totalCoins();
 
   const handlePlaceOrder = async () => {
     if (items.length === 0) return;

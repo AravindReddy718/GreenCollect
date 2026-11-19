@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import './SchedulePickup.css';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, getErrorMessage } from '../services/api';
 import { FaCalendar, FaTrash, FaMapMarkerAlt, FaCheckCircle, FaTimes, FaCoins, FaSpinner } from 'react-icons/fa';
 
 interface SchedulePickupProps {
@@ -73,11 +73,12 @@ const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId, onPick
       const estimatedWeight = weightOption ? weightOption.numericWeight : 0;
 
       // Prepare data for backend
-      const pickupDateTime = new Date(formData.pickupDate);
+      // datetime-local gives local "YYYY-MM-DDTHH:MM"; send those parts as-is so the date never shifts to UTC
+      const [datePart, timePart] = formData.pickupDate.split('T');
       const requestData = {
         userId: userId,
-        pickupDate: pickupDateTime.toISOString().split('T')[0], // YYYY-MM-DD
-        pickupTime: pickupDateTime.toTimeString().split(' ')[0], // HH:MM:SS
+        pickupDate: datePart, // YYYY-MM-DD (local)
+        pickupTime: timePart, // HH:MM (local)
         wasteType: formData.wasteType,
         estimatedWeight: estimatedWeight,
         pickupAddress: formData.address,
@@ -85,7 +86,6 @@ const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId, onPick
         instructions: formData.specialInstructions || 'None'
       };
 
-      console.log('Submitting pickup request:', requestData);
 
       const token = localStorage.getItem('token') || sessionStorage.getItem('token');
       
@@ -104,7 +104,6 @@ const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId, onPick
         throw new Error(result.message || 'Failed to schedule pickup');
       }
 
-      console.log('Pickup scheduled successfully:', result);
       
       // Show success message
       alert('✅ Pickup scheduled successfully! Our collector will contact you soon.');
@@ -120,9 +119,9 @@ const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId, onPick
       // Close the modal
       onClose();
 
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error scheduling pickup:', err);
-      setError(err.message || 'Failed to schedule pickup. Please try again.');
+      setError(getErrorMessage(err, 'Failed to schedule pickup. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -175,7 +174,8 @@ const SchedulePickup: React.FC<SchedulePickupProps> = ({ onClose, userId, onPick
                 value={formData.pickupDate}
                 onChange={handleChange}
                 required
-                min={new Date().toISOString().slice(0, 16)}
+                min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+                max={new Date(Date.now() + 90 * 86400000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
                 disabled={loading}
               />
             </div>

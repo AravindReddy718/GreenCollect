@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import './StatusPage.css';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, getErrorMessage } from '../services/api';
 import {
     FaCalendar,
     FaMapMarkerAlt,
@@ -82,7 +82,6 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
                 throw new Error('No authentication token found. Please log in again.');
             }
 
-            console.log('🔄 Fetching user pickups from my-requests endpoint...');
             
             // Use the my-requests endpoint that doesn't require user ID
             const response = await fetch(`${API_BASE_URL}/api/waste-requests/my-requests`, {
@@ -92,7 +91,6 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
                 }
             });
 
-            console.log('📡 Response status:', response.status);
 
             if (!response.ok) {
                 if (response.status === 401) {
@@ -107,16 +105,15 @@ const StatusPage: React.FC<StatusPageProps> = ({ onTabChange }) => {
             }
 
             const data = await response.json();
-            console.log('✅ Fetched requests:', data);
             
             if (data.success && data.requests) {
                 setPickups(data.requests);
             } else {
                 throw new Error('Invalid response format from server');
             }
-        } catch (err: any) {
-            console.error('❌ Error fetching pickups:', err);
-            setError(err.message || 'Failed to load your pickup requests. Please try again.');
+        } catch (err) {
+            console.error('Error fetching pickups:', err);
+            setError(getErrorMessage(err, 'Failed to load your pickup requests. Please try again.'));
             setPickups([]);
         } finally {
             setLoading(false);

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, getErrorMessage } from '../services/api';
 import './SustainableProducts.css';
 import {
     FaLeaf,
@@ -16,6 +16,20 @@ import {
     FaEye
 } from 'react-icons/fa';
 
+interface ApiProduct {
+    _id: string;
+    productName: string;
+    description: string;
+    price: number;
+    originalPrice?: number;
+    category: string;
+    productImage?: string;
+    stockQuantity?: number;
+    isActive?: boolean;
+    tags?: string[];
+    fastDelivery?: boolean;
+}
+
 interface Product {
     id: string;
     name: string;
@@ -24,12 +38,9 @@ interface Product {
     originalPrice?: number;
     category: string;
     image: string;
-    rating: number;
-    ecoRating: number;
     tags: string[];
     inStock: boolean;
     fastDelivery: boolean;
-    reviews: number;
 }
 
 interface SustainableProductsProps {
@@ -51,7 +62,6 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
 
     useEffect(() => {
         const fetchProducts = async () => {
-            console.log('Fetching products from backend...');
             try {
                 const response = await fetch(`${API_BASE_URL}/api/products`);
                 const data = await response.json();
@@ -59,7 +69,10 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                 if (!response.ok) throw new Error(data.message || 'Failed to fetch products');
     
                 // Map backend fields to your frontend Product interface
-                const formattedProducts: Product[] = data.products.map((p: any) => ({
+                // Deactivated products are hidden; stock comes from the real stockQuantity
+                const formattedProducts: Product[] = data.products
+                    .filter((p: ApiProduct) => p.isActive !== false)
+                    .map((p: ApiProduct) => ({
                     id: p._id,
                     name: p.productName,
                     description: p.description,
@@ -67,18 +80,15 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                     originalPrice: p.originalPrice,
                     category: p.category,
                     image: p.productImage || '',
-                    rating: p.rating ?? 4.5, // default if not present
-                    ecoRating: p.ecoRating ?? 5,
                     tags: p.tags ?? [],
-                    inStock: p.inStock ?? true,
+                    inStock: Number(p.stockQuantity) > 0,
                     fastDelivery: p.fastDelivery ?? false,
-                    reviews: p.reviews ?? 0,
                 }));
     
                 setProducts(formattedProducts);
-            } catch (err: any) {
+            } catch (err) {
                 console.error(err);
-                setError(err.message);
+                setError(getErrorMessage(err, 'Could not load products.'));
             } finally {
                 setLoading(false);
             }
@@ -94,10 +104,9 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
     const productStats = {
         totalProducts: products.length,
         affordableProducts: products.filter(p => p.price <= userCoins).length,
-        totalValue: products.reduce((sum, product) => sum + product.price, 0),
-        averageRating: products.length > 0
-    ? (products.reduce((sum, product) => sum + product.rating, 0) / products.length).toFixed(1)
-    : '0.0'
+        inStock: products.filter(p => p.inStock).length,
+        categories: new Set(products.map(p => p.category)).size,
+        cheapest: products.length > 0 ? Math.min(...products.map(p => p.price)) : 0
 
     };
 
@@ -121,29 +130,6 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
         );
     };
     
-
-    const renderStars = (rating: number) => {
-        return (
-            <div className="rating-stars">
-                {[1, 2, 3, 4, 5].map((star) => (
-                    <FaStar
-                        key={star}
-                        className={star <= rating ? 'star filled' : 'star'}
-                    />
-                ))}
-                <span className="rating-value">{rating}</span>
-            </div>
-        );
-    };
-
-    const renderEcoRating = (rating: number) => {
-        return (
-            <div className="eco-rating">
-                <FaLeaf className="eco-icon" />
-                <span className="eco-value">{rating}/5 Eco</span>
-            </div>
-        );
-    };
 
     const getDiscount = (originalPrice: number, price: number) => {
         return Math.round(((originalPrice - price) / originalPrice) * 100);
@@ -172,7 +158,7 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                     <div className="stat-content">
                         <h3>{productStats.totalProducts}</h3>
                         <p>Available Products</p>
-                        <span className="stat-trend positive">+5 new this week</span>
+                        <span className="stat-trend positive">{productStats.inStock} in stock</span>
                     </div>
                 </div>
 
@@ -183,7 +169,7 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                     <div className="stat-content">
                         <h3>{productStats.affordableProducts}</h3>
                         <p>Products You Can Afford</p>
-                        <span className="stat-trend positive">+{Math.floor(productStats.affordableProducts * 0.15)} more</span>
+                        <span className="stat-trend positive">With your {userCoins} coins</span>
                     </div>
                 </div>
 
@@ -192,9 +178,9 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                         <FaStar />
                     </div>
                     <div className="stat-content">
-                        <h3>{productStats.averageRating}</h3>
-                        <p>Average Rating</p>
-                        <span className="stat-trend positive">⭐ Excellent Quality</span>
+                        <h3>{productStats.categories}</h3>
+                        <p>Categories</p>
+                        <span className="stat-trend positive">Across the store</span>
                     </div>
                 </div>
 
@@ -203,9 +189,9 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                         <FaLeaf />
                     </div>
                     <div className="stat-content">
-                        <h3>4.8/5</h3>
-                        <p>Average Eco Rating</p>
-                        <span className="stat-trend positive">🌿 Very Sustainable</span>
+                        <h3>{productStats.cheapest}</h3>
+                        <p>Cheapest Item (coins)</p>
+                        <span className="stat-trend positive">Start redeeming</span>
                     </div>
                 </div>
             </div>
@@ -273,7 +259,6 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                                     )}
                                 </div>
                                 <div className="product-badges">
-                                    {renderEcoRating(product.ecoRating)}
                                     {product.fastDelivery && (
                                         <span className="badge delivery-badge">Fast Delivery</span>
                                     )}
@@ -300,10 +285,6 @@ const SustainableProducts: React.FC<SustainableProductsProps> = ({ userCoins: pr
                                 <p className="product-description">{product.description}</p>
 
                                 <div className="product-meta">
-                                    <div className="rating-section">
-                                        {renderStars(product.rating)}
-                                        <span className="review-count">({product.reviews} reviews)</span>
-                                    </div>
                                     
                                     <div className="product-category">
                                         <FaTag className="category-icon" />

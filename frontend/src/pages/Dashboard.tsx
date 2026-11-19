@@ -13,7 +13,7 @@ interface DashboardProps {
     userId?: string;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ role, onLogout: _onLogout, activeTab, userId }) => {
+const Dashboard: React.FC<DashboardProps> = ({ role, activeTab, userId }) => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {

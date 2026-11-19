@@ -1,7 +1,7 @@
 // src/pages/Login.tsx
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import api from '../services/api';
+import api, { getErrorMessage } from '../services/api';
 import { FaEnvelope, FaLock, FaEye, FaEyeSlash, FaArrowRight, FaRecycle, FaLeaf, FaUsers } from 'react-icons/fa';
 import { useAuth } from '../contexts/AuthContext';
 import './Login.css';
@@ -23,14 +23,12 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
     setLoading(true);
 
     try {
-      console.log('Attempting login...', { email });
       
       const res = await api.post('/api/auth/login', { 
         email, 
         password 
       });
       
-      console.log('Login response:', res.data);
       
       const { user, token } = res.data;
 
@@ -45,16 +43,9 @@ const Login = ({ onLogin }: { onLogin?: () => void }) => {
   if (onLogin) onLogin();
   navigate('/dashboard');
       
-    } catch (err: any) {
+    } catch (err) {
       console.error('Login error details:', err);
-      
-      if (err.response) {
-        setErrorMessage(err.response.data?.error || `Login failed: ${err.response.status}`);
-      } else if (err.request) {
-        setErrorMessage('Cannot connect to server. Please check your connection.');
-      } else {
-        setErrorMessage(err.message || 'Login failed. Please try again.');
-      }
+      setErrorMessage(getErrorMessage(err, 'Login failed. Please try again.'));
     } finally {
       setLoading(false);
     }

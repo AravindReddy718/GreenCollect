@@ -19,6 +19,8 @@ interface CartContextValue {
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
+// The provider and its hook live together on purpose; fast refresh simply reloads this file
+// eslint-disable-next-line react-refresh/only-export-components
 export const useCart = () => {
   const ctx = useContext(CartContext);
   if (!ctx) throw new Error('useCart must be used within CartProvider');
@@ -38,8 +40,8 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     try {
       localStorage.setItem('cart', JSON.stringify(items));
-    } catch (e) {
-      // ignore
+    } catch {
+      // Storage can be unavailable (private mode); the cart still works in memory
     }
   }, [items]);
 

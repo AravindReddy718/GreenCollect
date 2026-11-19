@@ -2,6 +2,10 @@ const express = require('express');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const Product = require('../models/Products.js');
+const { authMiddleware, requireRole } = require('../middleware/auth');
+const { sendError } = require('../utils/sendError');
+
+const adminOnly = [authMiddleware, requireRole(['admin'])];
 
 const router = express.Router();
 
@@ -12,33 +16,44 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Configure multer to use memory storage
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+// Images only, up to 5 MB, kept in memory until uploaded to Cloudinary
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype && file.mimetype.startsWith('image/')) return cb(null, true);
+    const err = new Error('Only image files are allowed');
+    err.status = 400;
+    cb(err);
+  }
+});
+
+const DEFAULT_PRODUCT_IMAGE = 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=500';
+
+function uploadToCloudinary(buffer) {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      { resource_type: 'image', folder: 'products' },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      }
+    );
+    uploadStream.end(buffer);
+  });
+}
 
 /**
  * POST /products
- * Creates a new product with an image upload.
- * The request must be multipart/form-data.
+ * Creates a new product, optionally with an image upload (multipart/form-data).
  */
-// POST /products
-router.post('/', upload.single('productImage'), async (req, res) => {
-  console.log('Create Product Request Body:', req.body);
+router.post('/', adminOnly, upload.single('productImage'), async (req, res) => {
   try {
-    let uploadResult = null;
-
-    if (req.file) {
-      uploadResult = await new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          { resource_type: 'image', folder: 'products' },
-          (error, result) => {
-            if (error) return reject(error);
-            resolve(result);
-          }
-        );
-        uploadStream.end(req.file.buffer);
-      });
+    if (!String(req.body.productName || '').trim()) {
+      return res.status(400).json({ success: false, message: 'Product name is required' });
     }
+
+    const uploadResult = req.file ? await uploadToCloudinary(req.file.buffer) : null;
 
     const newProduct = new Product({
       productName: req.body.productName,
@@ -47,13 +62,10 @@ router.post('/', upload.single('productImage'), async (req, res) => {
       price: req.body.price,
       coinsRequired: req.body.coinsRequired,
       stockQuantity: req.body.stockQuantity,
-      productImage: uploadResult ? uploadResult.secure_url : (req.body.productImage || 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=500'),
+      productImage: uploadResult ? uploadResult.secure_url : (req.body.productImage || DEFAULT_PRODUCT_IMAGE),
       cloudinaryId: uploadResult ? uploadResult.public_id : null,
       isActive: true
     });
-    console.log('New Product to be saved:', newProduct);
-    // In your backend create-product API, before saving
-    delete req.body.slug; // remove any slug field if it exists
 
     const savedProduct = await newProduct.save();
 
@@ -61,35 +73,17 @@ router.post('/', upload.single('productImage'), async (req, res) => {
       message: 'Product created successfully!',
       product: savedProduct
     });
-
   } catch (error) {
-    console.error('Create Product Error:', error);
-    res.status(500).json({
-      message: 'An error occurred while creating the product.',
-      error: error.message
-    });
+    sendError(res, error, 'An error occurred while creating the product.');
   }
 });
 
-router.put('/update/:id', upload.single('productImage'), async (req, res) => {
-  console.log('Update Product Request Body:', req.body);
+router.put('/update/:id', adminOnly, upload.single('productImage'), async (req, res) => {
   try {
     const { id } = req.params;
 
     // Upload image to Cloudinary if a new file is provided
-    let uploadResult = null;
-    if (req.file) {
-      uploadResult = await new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          { resource_type: 'image', folder: 'products' },
-          (error, result) => {
-            if (error) return reject(error);
-            resolve(result);
-          }
-        );
-        uploadStream.end(req.file.buffer);
-      });
-    }
+    const uploadResult = req.file ? await uploadToCloudinary(req.file.buffer) : null;
 
     // Build update object
     const updateData = {
@@ -121,77 +115,69 @@ router.put('/update/:id', upload.single('productImage'), async (req, res) => {
       product: updatedProduct,
     });
   } catch (error) {
-    console.error('Error updating product:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    sendError(res, error, 'Server error while updating product');
   }
 });
 
 router.get('/', async (req, res) => {
-  console.log('Fetching all products from the database...');
-    try {
-        const products = await Product.find(); // Fetch all documents in Product collection
-        console.log('GET /products called');
-        console.log('Fetched Products:', products);
-        res.status(200).json({
-            message: 'Products fetched successfully',
-            products
-        });
-    } catch (error) {
-        console.error('Error fetching products:', error);
-        res.status(500).json({ message: 'Server error', error: error.message });
-      }
+  try {
+    const products = await Product.find();
+    res.status(200).json({
+      message: 'Products fetched successfully',
+      products
+    });
+  } catch (error) {
+    sendError(res, error, 'Server error while fetching products');
+  }
 });
 
-// ==================================
-// 🔴 2. DELETE — Delete product by ID
-// ==================================
-router.delete('/delete/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
+// DELETE — Delete product by ID
+router.delete('/delete/:id', adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
 
-        const deletedProduct = await Product.findByIdAndDelete(id);
+    const deletedProduct = await Product.findByIdAndDelete(id);
 
-        if (!deletedProduct) {
-            return res.status(404).json({ message: 'Product not found' });
-        }
-
-        res.status(200).json({
-            message: 'Product deleted successfully',
-            deletedProduct
-        });
-    } catch (error) {
-        console.error('Error deleting product:', error);
-        res.status(500).json({ message: 'Server error', error: error.message });
+    if (!deletedProduct) {
+      return res.status(404).json({ message: 'Product not found' });
     }
+
+    res.status(200).json({
+      message: 'Product deleted successfully',
+      deletedProduct
+    });
+  } catch (error) {
+    sendError(res, error, 'Server error while deleting product');
+  }
 });
-router.patch('/status/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { isActive } = req.body;
 
-        // Validate input
-        if (typeof isActive !== 'boolean') {
-            return res.status(400).json({ message: '`isActive` must be a boolean value (true or false).' });
-        }
+router.patch('/status/:id', adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isActive } = req.body;
 
-        const updatedProduct = await Product.findByIdAndUpdate(
-            id,
-            { isActive },
-            { new: true, runValidators: true }
-        );
-
-        if (!updatedProduct) {
-            return res.status(404).json({ message: 'Product not found' });
-        }
-
-        res.status(200).json({
-            message: isActive ? 'Product activated successfully' : 'Product deactivated successfully',
-            product: updatedProduct
-        });
-    } catch (error) {
-        console.error('Error updating product status:', error);
-        res.status(500).json({ message: 'Server error', error: error.message });
+    // Validate input
+    if (typeof isActive !== 'boolean') {
+      return res.status(400).json({ message: '`isActive` must be a boolean value (true or false).' });
     }
+
+    const updatedProduct = await Product.findByIdAndUpdate(
+      id,
+      { isActive },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedProduct) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    res.status(200).json({
+      message: isActive ? 'Product activated successfully' : 'Product deactivated successfully',
+      product: updatedProduct
+    });
+  } catch (error) {
+    sendError(res, error, 'Server error while updating product status');
+  }
 });
 
 module.exports = router;

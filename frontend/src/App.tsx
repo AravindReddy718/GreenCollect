@@ -113,6 +113,22 @@ const UnauthorizedPage = () => {
   );
 };
 
+// 404 page for unknown URLs
+const NotFoundPage = () => (
+  <div className="unauthorized-container">
+    <div className="unauthorized-content">
+      <h1>Page not found</h1>
+      <p>The page you are looking for does not exist or has moved.</p>
+      <button onClick={() => window.history.back()} className="btn btn-primary">
+        Go Back
+      </button>
+      <button onClick={() => window.location.assign('/')} className="btn btn-secondary">
+        Go to Home
+      </button>
+    </div>
+  </div>
+);
+
 // Create a wrapper component that uses the auth context
 function AppContent() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -282,7 +298,7 @@ function AppContent() {
 
           {/* Error Routes */}
           <Route path="/unauthorized" element={<UnauthorizedPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </div>
       <Footer />

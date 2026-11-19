@@ -19,7 +19,7 @@ import {
 } from 'react-icons/fa';
 import './Navbar.css';
 import { useCart } from '../contexts/CartContext';
-import { API_BASE_URL } from '../services/api';
+import api, { API_BASE_URL } from '../services/api';
 
 interface User {
   id: string;
@@ -66,13 +66,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const notificationsRef = useRef<HTMLDivElement | null>(null);
-  const cart = (() => {
-    try {
-      return useCart();
-    } catch (e) {
-      return null;
-    }
-  })();
+  const cart = useCart();
 
   // Load user data from storage when component mounts or login status changes
   useEffect(() => {
@@ -82,16 +76,11 @@ const Navbar: React.FC<NavbarProps> = ({
         const storage = loginMethod === 'local' ? localStorage : sessionStorage;
         
         const userData = storage.getItem('user');
-        const savedAvatar = localStorage.getItem('profile.avatar');
-        
+
         if (userData) {
           const parsedUser = JSON.parse(userData);
           setUser(parsedUser);
-          console.log('Navbar loaded user:', parsedUser);
-        }
-        
-        if (savedAvatar) {
-          setAvatarUrl(savedAvatar);
+          setAvatarUrl(parsedUser.avatar || null);
         }
       } catch (error) {
         console.error('Error loading user data in Navbar:', error);
@@ -113,15 +102,11 @@ const Navbar: React.FC<NavbarProps> = ({
         const storage = loginMethod === 'local' ? localStorage : sessionStorage;
         
         const userData = storage.getItem('user');
-        const savedAvatar = localStorage.getItem('profile.avatar');
-        
+
         if (userData) {
           const parsedUser = JSON.parse(userData);
           setUser(parsedUser);
-        }
-        
-        if (savedAvatar) {
-          setAvatarUrl(savedAvatar);
+          setAvatarUrl(parsedUser.avatar || null);
         }
       } catch (error) {
         console.error('Error loading user data in Navbar:', error);
@@ -136,7 +121,7 @@ const Navbar: React.FC<NavbarProps> = ({
     const refreshUserData = async () => {
       try {
         const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-        if (!token || !user) return;
+        if (!token) return;
 
         // Fetch updated user data to get latest coins
         const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
@@ -161,10 +146,11 @@ const Navbar: React.FC<NavbarProps> = ({
     };
 
     // Refresh when on dashboard or status page where coins might change
+    // Runs once per page visit; depending on `user` here made it refetch forever
     if (location.pathname === '/dashboard' || location.pathname === '/status') {
       refreshUserData();
     }
-  }, [location.pathname, user]);
+  }, [location.pathname]);
 
   const handleLogout = () => {
     setUser(null);
@@ -226,26 +212,21 @@ const Navbar: React.FC<NavbarProps> = ({
     setDropdownOpen(false);
   };
 
-  const notifications = [
-    {
-      id: 1,
-      message: 'Your pickup request has been confirmed',
-      time: '5 min ago',
-      read: false,
-    },
-    {
-      id: 2,
-      message: 'Collector is on the way to pickup your waste',
-      time: '1 hour ago',
-      read: false,
-    },
-    {
-      id: 3,
-      message: 'You earned 150 coins from your last pickup!',
-      time: '2 hours ago',
-      read: true,
-    },
-  ];
+  const [notifications, setNotifications] = useState<
+    { _id: string; message: string; createdAt: string; read: boolean }[]
+  >([]);
+
+  // Load the logged-in user's real notifications
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setNotifications([]);
+      return;
+    }
+    api
+      .get('/api/notifications')
+      .then((res) => setNotifications(res.data?.items || []))
+      .catch(() => setNotifications([]));
+  }, [isLoggedIn]);
 
   const unreadNotifications = notifications.filter((n) => !n.read).length;
 
@@ -393,9 +374,12 @@ const Navbar: React.FC<NavbarProps> = ({
                       </span>
                     </div>
                     <div className="notifications-list">
+                      {notifications.length === 0 && (
+                        <p className="notification-message">No notifications yet</p>
+                      )}
                       {notifications.map((notification) => (
                         <div
-                          key={notification.id}
+                          key={notification._id}
                           className={`notification-item ${
                             notification.read ? 'read' : 'unread'
                           }`}
@@ -404,7 +388,7 @@ const Navbar: React.FC<NavbarProps> = ({
                             {notification.message}
                           </p>
                           <span className="notification-time">
-                            {notification.time}
+                            {new Date(notification.createdAt).toLocaleString()}
                           </span>
                         </div>
                       ))}

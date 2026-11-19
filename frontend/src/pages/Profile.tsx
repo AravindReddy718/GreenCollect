@@ -8,7 +8,7 @@ import {
   FaTruck, FaExclamationTriangle 
 } from 'react-icons/fa';
 import { useAuth } from '../contexts/AuthContext';
-import api from '../services/api';
+import api, { getErrorMessage } from '../services/api';
 
 const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
   const [mounted, setMounted] = useState(false);
@@ -29,16 +29,9 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
     }
   }, [onTabChange]);
 
-  // Load persisted avatar and activities
+  // The avatar comes from the logged-in user's record only
   useEffect(() => {
-    if (user?.avatar) {
-      setAvatarUrl(user.avatar);
-    } else {
-      try {
-        const savedAvatar = localStorage.getItem('profile.avatar');
-        if (savedAvatar) setAvatarUrl(savedAvatar);
-      } catch {}
-    }
+    setAvatarUrl(user?.avatar || null);
   }, [user?.avatar]);
 
   useEffect(() => {
@@ -46,13 +39,13 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
       try {
         const res = await api.get('/api/waste-requests/my-requests');
         if (res.data?.success && Array.isArray(res.data.requests)) {
-          const list = res.data.requests.slice(0, 5).map((r: any) =>
+          const list = res.data.requests.slice(0, 5).map((r: { status: string; wasteType: string; estimatedWeight: number; pickupDate: string }) =>
             `${r.status.toUpperCase()}: ${r.wasteType} pickup (${r.estimatedWeight} kg) on ${r.pickupDate}`
           );
           if (list.length > 0) setActivities(list);
         }
-      } catch (e) {
-        // ignore
+      } catch {
+        // Recent activity is optional; the profile still shows without it
       }
     };
     fetchActivities();
@@ -65,9 +58,8 @@ const Profile = ({ onTabChange }: { onTabChange?: (tab: string) => void }) => {
         await api.put('/api/auth/profile', { avatar: url.trim() });
         setAvatarUrl(url.trim());
         updateUser({ avatar: url.trim() });
-        localStorage.setItem('profile.avatar', url.trim());
       } catch (err) {
-        console.error('Failed to update avatar:', err);
+        alert(getErrorMessage(err, 'Could not update your avatar.'));
       }
     }
   };

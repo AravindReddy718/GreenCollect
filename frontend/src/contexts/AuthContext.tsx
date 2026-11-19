@@ -1,5 +1,6 @@
 // src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
 import api from '../services/api';
 
 export interface User {
@@ -33,7 +34,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
+export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -50,6 +51,8 @@ export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }
     sessionStorage.removeItem('token');
     sessionStorage.removeItem('user');
     sessionStorage.removeItem('loginMethod');
+    // Older versions cached the avatar separately; clear it so the next account never sees it
+    localStorage.removeItem('profile.avatar');
     setUser(null);
   }, []);
 
@@ -65,8 +68,8 @@ export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }
         const storage = getStorage();
         storage.setItem('user', JSON.stringify(updated));
       }
-    } catch (err: any) {
-      if (err.response?.status === 401) {
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
         logout();
       }
     }
@@ -91,8 +94,8 @@ export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }
               const storage = getStorage();
               storage.setItem('user', JSON.stringify(freshUser));
             }
-          } catch (err: any) {
-            if (err.response?.status === 401) {
+          } catch (err) {
+            if (axios.isAxiosError(err) && err.response?.status === 401) {
               console.warn('Session expired or token invalid, logging out');
               logout();
             }
@@ -152,6 +155,8 @@ export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }
   );
 };
 
+// The provider and its hook live together on purpose; fast refresh simply reloads this file
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);
   if (context === undefined) {

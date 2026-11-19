@@ -1,7 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
 import './ProductManagement.css';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, getAuthToken, getErrorMessage } from '../services/api';
 import { FaPlus, FaEdit, FaTrash, FaImage, FaRupeeSign } from 'react-icons/fa';
+interface ApiProduct {
+    _id: string;
+    productName: string;
+    description: string;
+    price: number;
+    coinsRequired: number;
+    category: string;
+    productImage?: string;
+    stockQuantity: number;
+    isActive?: boolean;
+}
+
 interface Product {
     id: string; // changed from number to string
     name: string;
@@ -46,7 +58,7 @@ const ProductManagement = () => {
             if (!res.ok) throw new Error(data.message || 'Failed to fetch products');
     
             // Map backend fields to frontend Product interface
-            const mappedProducts: Product[] = data.products.map((p: any) => ({
+            const mappedProducts: Product[] = data.products.map((p: ApiProduct) => ({
                 id: p._id,  // assuming MongoDB _id
                 name: p.productName,
                 description: p.description,
@@ -59,8 +71,8 @@ const ProductManagement = () => {
             }));
     
             setProducts(mappedProducts);
-        } catch (err: any) {
-            console.error('Error fetching products:', err.message);
+        } catch (err) {
+            console.error('Error fetching products:', getErrorMessage(err));
         }
     };
     useEffect(() => {
@@ -81,13 +93,14 @@ const ProductManagement = () => {
         formPayload.append('stockQuantity', formData.stock.toString());
       
         // if you add file input for image
-        if ((formData as any).imageFile) {
-          formPayload.append('productImage', (formData as any).imageFile);
+        if (formData.imageFile) {
+          formPayload.append('productImage', formData.imageFile);
         }
       
         try {
           const res = await fetch(`${API_BASE_URL}/api/products`, {
             method: 'POST',
+            headers: { Authorization: `Bearer ${getAuthToken()}` },
             body: formPayload, // multipart/form-data
           });
       
@@ -110,8 +123,8 @@ const ProductManagement = () => {
           
           setFormData({ name: '', description: '', price: 0, coins: 0, category: '', stock: 0,imageFile: null });
           setShowAddForm(false);
-        } catch (err: any) {
-          console.error(err.message);
+        } catch (err) {
+          alert(getErrorMessage(err, 'Could not create the product.'));
         }
       };
       
@@ -151,6 +164,7 @@ const ProductManagement = () => {
         try {
             const res = await fetch(`${API_BASE_URL}/api/products/update/${editingProduct.id}`, {
                 method: 'PUT',
+                headers: { Authorization: `Bearer ${getAuthToken()}` },
                 body: formPayload
             });
       
@@ -186,8 +200,8 @@ const ProductManagement = () => {
                 imageFile: null
             });
             setShowAddForm(false);
-        } catch (err: any) {
-            console.error('Error updating product:', err.message);
+        } catch (err) {
+            alert(getErrorMessage(err, 'Could not update the product.'));
         }
     };
     
@@ -199,6 +213,7 @@ const handleDeleteProduct = async (productId: string) => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/products/delete/${productId}`, {
         method: 'DELETE',
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
       });
   
       const data = await res.json();
@@ -208,9 +223,8 @@ const handleDeleteProduct = async (productId: string) => {
       // Remove the deleted product from local state
       setProducts(prevProducts => prevProducts.filter(p => p.id !== productId));
   
-      console.log('Product deleted successfully:', data.message);
-    } catch (err: any) {
-      console.error('Error deleting product:', err.message);
+    } catch (err) {
+      alert(getErrorMessage(err, 'Could not delete the product.'));
     }
   };
   
@@ -219,10 +233,10 @@ const handleDeleteProduct = async (productId: string) => {
     if (!product) return;
   
     try {
-      const res = await fetch(`${API_BASE_URL}/api/products/update/${productId}`, {
-        method: 'PUT',
+      const res = await fetch(`${API_BASE_URL}/api/products/status/${productId}`, {
+        method: 'PATCH',
         body: JSON.stringify({ isActive: !product.isActive }),
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAuthToken()}` }
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to update status');
@@ -230,8 +244,8 @@ const handleDeleteProduct = async (productId: string) => {
       setProducts(prev =>
         prev.map(p => p.id === productId ? { ...p, isActive: !p.isActive } : p)
       );
-    } catch (err: any) {
-      console.error('Error toggling status:', err.message);
+    } catch (err) {
+      alert(getErrorMessage(err, 'Could not change the product status.'));
     }
   };
   

@@ -5,6 +5,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const http = require('http');
 const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
 const companyRoutes = require('./routes/companyRoutes');
 
 const app = express();
@@ -28,10 +29,8 @@ const corsOptions = {
   origin: function (origin, callback) {
     // allow requests with no origin (like mobile apps, curl, postman)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
-      return callback(null, true);
-    }
-    return callback(new Error('Not allowed by CORS'));
+    // Unknown origins get no CORS headers, so the browser blocks them (no server error)
+    return callback(null, allowedOrigins.includes(origin));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
@@ -40,8 +39,19 @@ const corsOptions = {
 
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
+  }
+});
+
+// Only logged-in users can open a socket; the room comes from the verified token, not the client
+io.use((socket, next) => {
+  try {
+    const token = socket.handshake.auth && socket.handshake.auth.token;
+    socket.userId = jwt.verify(token, process.env.JWT_SECRET).id;
+    next();
+  } catch (err) {
+    next(new Error('Unauthorized'));
   }
 });
 
@@ -66,9 +76,6 @@ const adminRoutes = require('./routes/admin');
 const wasteRequestRoutes = require('./routes/wasteRequest');
 const orderRoutes = require('./routes/orderRoutes');
 
-// Import middleware
-const { authMiddleware } = require('./middleware/auth');
-
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
@@ -78,15 +85,6 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/waste-requests', wasteRequestRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api', companyRoutes);
-
-// Protected example route
-app.get('/api/protected', authMiddleware, (req, res) => {
-  res.json({ 
-    success: true,
-    message: 'You accessed a protected route', 
-    user: req.user 
-  });
-});
 
 // Health check route
 app.get('/api/health', (req, res) => {
@@ -142,11 +140,13 @@ app.use('/api', (req, res) => {
 
 // Centralized error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Unhandled server error:', err);
-  const status = err.statusCode || err.status || 500;
+  // Upload limit / file type errors are the client's fault
+  const status = err.name === 'MulterError' ? 400 : (err.statusCode || err.status || 500);
+  if (status >= 500) console.error('Unhandled server error:', err);
   res.status(status).json({
     success: false,
-    message: err.message || 'Internal Server Error'
+    // Never send internal error details to the client
+    message: status < 500 ? err.message : 'Internal Server Error'
   });
 });
 
@@ -171,11 +171,7 @@ server.on('error', (err) => {
 
 // Socket authentication
 io.on('connection', (socket) => {
-  const userId = socket.handshake.query.userId;
-  if (userId) {
-    socket.join(`user:${userId}`);
-    console.log(`User ${userId} connected to socket`);
-  }
+  socket.join(`user:${socket.userId}`);
 });
 
 // MongoDB change stream for real-time notifications
@@ -183,6 +179,11 @@ const Notification = require('./models/Notification');
 mongoose.connection.once('open', () => {
   try {
     const changeStream = Notification.watch([], { fullDocument: 'updateLookup' });
+    // Standalone MongoDB (local installs) has no change streams; log it instead of crashing the server
+    changeStream.on('error', (err) => {
+      console.warn('❌ Change stream unavailable (real-time notifications disabled):', err?.message || err);
+      changeStream.close().catch(() => {});
+    });
     changeStream.on('change', (change) => {
       if (change.operationType === 'insert') {
         const doc = change.fullDocument;

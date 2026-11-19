@@ -32,7 +32,7 @@ const ElevenLabsEmbed = ({ isLoggedIn }: ElevenLabsEmbedProps) => {
     const waitForCustomElement = (): Promise<void> => {
       return new Promise((resolve) => {
         const check = () => {
-          if ((window as any).customElements && (window as any).customElements.get('elevenlabs-convai')) {
+          if (window.customElements && window.customElements.get('elevenlabs-convai')) {
             resolve();
           } else {
             setTimeout(check, 300);

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 400" role="img" aria-label="Coconut Shell Bowl">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#efebe9"/><stop offset="1" stop-color="#bcaaa4"/></linearGradient></defs>
+  <rect width="500" height="400" fill="url(#g)"/>
+  <text x="250" y="215" font-size="150" text-anchor="middle" dominant-baseline="middle">🥥</text>
+  <text x="250" y="355" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="600" fill="#1b5e20" text-anchor="middle">Coconut Shell Bowl</text>
+</svg>

@@ -1,7 +1,7 @@
 import './Register.css';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import api from '../services/api';
+import api, { getErrorMessage } from '../services/api';
 import { FaUser, FaEnvelope, FaLock, FaPhone, FaMapMarkerAlt, FaTruck, FaIdCard, FaClipboard, FaCheck, FaArrowRight, FaRecycle, FaUsers } from 'react-icons/fa';
 
 const Register = () => {
@@ -27,7 +27,13 @@ const Register = () => {
     setIsSubmitting(true);
 
     try {
-      let payload: any = { name, email, password, role };
+      const payload: {
+        name: string;
+        email: string;
+        password: string;
+        role: string;
+        collectorInfo?: Record<string, string>;
+      } = { name, email, password, role };
 
       if (role === 'collector') {
         payload.collectorInfo = {
@@ -47,12 +53,11 @@ const Register = () => {
         } else {
           alert(`User Registration Successful!\n\nWelcome ${name}! You can now login.`);
         }
-        console.log('Registration response:', res.data);
         navigate('/login');
       }
-    } catch (err: any) {
-      console.error('Registration error:', err.response || err);
-      setMessage(err.response?.data?.error || err.response?.data?.message || 'Registration failed');
+    } catch (err) {
+      console.error('Registration error:', err);
+      setMessage(getErrorMessage(err, 'Registration failed'));
     } finally {
       setIsSubmitting(false);
     }
@@ -153,9 +158,10 @@ const Register = () => {
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     className="form-input"
-                    placeholder="Create a strong password"
+                    placeholder="At least 8 characters"
                     required
-                    minLength={6}
+                    minLength={8}
+                    maxLength={72}
                   />
                 </div>
               </div>

@@ -13,7 +13,7 @@ const collectorActivitySchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['accepted', 'in-progress', 'completed', 'cancelled'],
+    enum: ['accepted', 'rejected', 'in-progress', 'completed', 'cancelled'],
     required: true
   },
   activityDate: {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import './CollectorDashboard.css';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, getErrorMessage } from '../services/api';
 
 import { 
     FaTruck, FaCheckCircle, FaMapMarkerAlt, FaClock, 
@@ -36,20 +36,13 @@ interface PickupRequest {
     collectorId?: string;
 }
 
-const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, collectorId: _collectorId }) => {
+const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [priorityFilter, setPriorityFilter] = useState<string>('all');
     const [pickupRequests, setPickupRequests] = useState<PickupRequest[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [stats, setStats] = useState({
-        total: 0,
-        pending: 0,
-        inProgress: 0,
-        completed: 0,
-        today: 0
-    });
 
     const today = new Date().toISOString().split('T')[0];
 
@@ -65,10 +58,6 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [statusFilter]);
 
-    // Calculate stats from pickup requests
-    useEffect(() => {
-        calculateStats();
-    }, [pickupRequests]);
 
     const fetchPickupRequests = async () => {
         try {
@@ -84,7 +73,6 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
             const queryString = params.toString();
             const url = `${API_BASE_URL}/api/waste-requests${queryString ? `?${queryString}` : ''}`;
             
-            console.log('🔄 Fetching pickup requests from:', url);
 
             const response = await fetch(url, {
                 headers: {
@@ -93,14 +81,12 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
                 }
             });
 
-            console.log('📡 Response status:', response.status);
 
             if (!response.ok) {
                 throw new Error(`Failed to fetch requests: ${response.status}`);
             }
 
             const data: PickupRequest[] = await response.json();
-            console.log('✅ Fetched requests:', data.length);
             setPickupRequests(data);
         } catch (err) {
             console.error('❌ Error fetching requests:', err);
@@ -111,21 +97,18 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
         }
     };
 
-    const calculateStats = () => {
-        const statsData = {
-            total: pickupRequests.length,
-            pending: pickupRequests.filter(r => r.status === 'pending').length,
-            inProgress: pickupRequests.filter(r => r.status === 'in-progress').length,
-            completed: pickupRequests.filter(r => r.status === 'completed').length,
-            today: pickupRequests.filter(r => r.pickupDate === today).length
-        };
-        setStats(statsData);
+    // Stats are derived from the loaded requests on every render
+    const stats = {
+        total: pickupRequests.length,
+        pending: pickupRequests.filter(r => r.status === 'pending').length,
+        inProgress: pickupRequests.filter(r => r.status === 'in-progress').length,
+        completed: pickupRequests.filter(r => r.status === 'completed').length,
+        today: pickupRequests.filter(r => r.pickupDate === today).length
     };
 
     const handleAcceptRequest = async (requestId: string) => {
         try {
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-            console.log('🔄 Accepting request:', requestId);
             
             const response = await fetch(`${API_BASE_URL}/api/waste-requests/${requestId}/accept`, {
                 method: 'PUT',
@@ -135,7 +118,6 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
                 }
             });
 
-            console.log('📡 Accept response status:', response.status);
 
             if (!response.ok) {
                 const errorData = await response.json();
@@ -144,15 +126,14 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
             }
 
             const result = await response.json();
-            console.log('✅ Accept success:', result);
             
             if (result.success) {
                 alert('✅ Request accepted successfully!');
                 fetchPickupRequests();
             }
-        } catch (err: any) {
+        } catch (err) {
             console.error('💥 Error accepting request:', err);
-            alert(`Failed to accept request: ${err.message}`);
+            alert(`Failed to accept request: ${getErrorMessage(err)}`);
         }
     };
 
@@ -178,16 +159,15 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
                 alert('Request rejected successfully!');
                 fetchPickupRequests();
             }
-        } catch (err: any) {
+        } catch (err) {
             console.error('Error rejecting request:', err);
-            alert(`Failed to reject request: ${err.message}`);
+            alert(`Failed to reject request: ${getErrorMessage(err)}`);
         }
     };
 
     const handleStartPickup = async (requestId: string) => {
         try {
             const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-            console.log('🔄 Starting pickup for request:', requestId);
             
             const response = await fetch(`${API_BASE_URL}/api/waste-requests/${requestId}/start`, {
                 method: 'PUT',
@@ -197,7 +177,6 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
                 }
             });
 
-            console.log('📡 Start pickup response status:', response.status);
 
             if (!response.ok) {
                 const errorData = await response.json();
@@ -206,15 +185,14 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
             }
 
             const result = await response.json();
-            console.log('✅ Start pickup success:', result);
             
             if (result.success) {
                 alert('🚚 Pickup started successfully!');
                 fetchPickupRequests();
             }
-        } catch (err: any) {
+        } catch (err) {
             console.error('💥 Error starting pickup:', err);
-            alert(`Failed to start pickup: ${err.message}`);
+            alert(`Failed to start pickup: ${getErrorMessage(err)}`);
         }
     };
 
@@ -240,9 +218,9 @@ const CollectorDashboard: React.FC<CollectorDashboardProps> = ({ activeTab, coll
                 alert(`✅ Pickup completed successfully! User earned ${result.coinsEarned} coins.`);
                 fetchPickupRequests();
             }
-        } catch (err: any) {
+        } catch (err) {
             console.error('Error completing pickup:', err);
-            alert(`Failed to complete pickup: ${err.message}`);
+            alert(`Failed to complete pickup: ${getErrorMessage(err)}`);
         }
     };
 

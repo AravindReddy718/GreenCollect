@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import './AdminDashboard.css';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, getAuthToken } from '../services/api';
 import { 
     FaUsers, FaUserCheck, FaChartLine, FaCheck, FaTimes, 
     FaEnvelope, FaPhone, FaMapMarkerAlt, FaClock, 
@@ -8,6 +8,31 @@ import {
 } from 'react-icons/fa';
 import ProductManagement from './ProductManagement';
 import AdminOrganisations from './AdminOrganisations';
+
+interface CollectorApiUser {
+    _id: string;
+    name: string;
+    email: string;
+    createdAt: string;
+    collectorInfo?: {
+        phone?: string;
+        address?: string;
+        vehicleType?: string;
+        vehicleNumberPlate?: string;
+        experience?: string;
+        isApproved?: boolean;
+        status?: 'pending' | 'approved' | 'rejected';
+    };
+}
+
+interface AdminStats {
+    totalUsers: number;
+    approvedCollectors: number;
+    completedPickups: number;
+    wasteRecycledKg: number;
+    coinsRedeemed: number;
+    topCollectors: Array<{ id: string; name: string; completedPickups: number }>;
+}
 
 interface AdminDashboardProps {
     activeTab: string;
@@ -41,12 +66,7 @@ interface CollectorRequest {
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
     const [collectorRequests, setCollectorRequests] = useState<CollectorRequest[]>([]);
     const [loading, setLoading] = useState(true);
-    const [activeCollectors] = useState([
-        { id: 1, name: 'Rahul Verma', completedPickups: 45, rating: 4.8 },
-        { id: 2, name: 'Sneha Patel', completedPickups: 38, rating: 4.9 },
-        { id: 3, name: 'Ankit Joshi', completedPickups: 52, rating: 4.7 },
-        { id: 4, name: 'Meera Reddy', completedPickups: 29, rating: 4.6 }
-    ]);
+    const [stats, setStats] = useState<AdminStats | null>(null);
 
     const [recycledPartners, setRecycledPartners] = useState<RecycledPartner[]>([]);
 
@@ -83,7 +103,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
             const response = await fetch(`${API_BASE_URL}/api/partners`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${getAuthToken()}`
                 },
                 body: JSON.stringify(newPartner)
             });
@@ -120,11 +141,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
     const fetchCollectorRequests = async () => {
         try {
             setLoading(true);
-            const response = await fetch(`${API_BASE_URL}/api/admin/collector-requests`);
+            const response = await fetch(`${API_BASE_URL}/api/admin/collector-requests`, {
+                headers: { Authorization: `Bearer ${getAuthToken()}` }
+            });
             if (response.ok) {
                 const data = await response.json();
                 // Transform backend data to match frontend interface
-                const requests: CollectorRequest[] = data.map((user: any) => ({
+                const requests: CollectorRequest[] = data.map((user: CollectorApiUser) => ({
                     id: user._id,
                     name: user.name,
                     email: user.email,
@@ -134,7 +157,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                     vehicleNumber: user.collectorInfo?.vehicleNumberPlate || 'N/A',
                     experience: user.collectorInfo?.experience || 'No experience provided',
                     submittedAt: new Date(user.createdAt).toLocaleString(),
-                    status: user.collectorInfo?.isApproved ? 'approved' : 'pending'
+                    status: user.collectorInfo?.status ?? 'pending'
                 }));
                 setCollectorRequests(requests);
             }
@@ -145,9 +168,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
         }
     };
 
+    // Real platform numbers (users, collectors, recycled weight, coins redeemed, top collectors)
+    const fetchStats = async () => {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/admin/stats`, {
+                headers: { Authorization: `Bearer ${getAuthToken()}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setStats(data.stats);
+            }
+        } catch (error) {
+            console.error('Error fetching admin stats:', error);
+        }
+    };
+
     useEffect(() => {
         if (activeTab === 'management' || activeTab === 'overview') {
             fetchCollectorRequests();
+            fetchStats();
         }
     }, [activeTab]);
 
@@ -171,7 +210,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                             : request
                     )
                 );
-                console.log(`✅ Approved collector request: ${requestId}`);
             } else {
                 const errorData = await response.json();
                 console.error('Failed to approve collector:', errorData);
@@ -199,7 +237,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                 setCollectorRequests(prev => 
                     prev.filter(request => request.id !== requestId)
                 );
-                console.log(`✅ Rejected collector request: ${requestId}`);
             } else {
                 const errorData = await response.json();
                 console.error('Failed to reject collector:', errorData);
@@ -256,9 +293,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                                     <FaUsers />
                                 </div>
                                 <div className="stat-content">
-                                    <h3>1,240</h3>
+                                    <h3>{stats?.totalUsers ?? 0}</h3>
                                     <p>Total Users</p>
-                                    <span className="stat-trend positive">+15% growth</span>
+                                    <span className="stat-trend positive">Registered users</span>
                                 </div>
                             </div>
 
@@ -267,9 +304,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                                     <FaTruck />
                                 </div>
                                 <div className="stat-content">
-                                    <h3>{activeCollectors.length}</h3>
+                                    <h3>{stats?.approvedCollectors ?? 0}</h3>
                                     <p>Active Collectors</p>
-                                    <span className="stat-trend positive">+5 this month</span>
+                                    <span className="stat-trend positive">Approved collectors</span>
                                 </div>
                             </div>
 
@@ -280,7 +317,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                                 <div className="stat-content">
                                     <h3>{pendingRequests.length}</h3>
                                     <p>Pending Approvals</p>
-                                    <span className="stat-trend negative">-2 from last week</span>
+                                    <span className={`stat-trend ${pendingRequests.length ? 'negative' : 'positive'}`}>
+                                        {pendingRequests.length ? 'Awaiting your review' : 'All caught up'}
+                                    </span>
                                 </div>
                             </div>
 
@@ -291,7 +330,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                                 <div className="stat-content">
                                     <h3>{recycledPartners.length}</h3>
                                     <p>Recycling Partners</p>
-                                    <span className="stat-trend positive">+3 new partners</span>
+                                    <span className="stat-trend positive">Verified partners</span>
                                 </div>
                             </div>
 
@@ -300,9 +339,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                                     <FaChartLine />
                                 </div>
                                 <div className="stat-content">
-                                    <h3>₹89,240</h3>
-                                    <p>Total Revenue</p>
-                                    <span className="stat-trend positive">+25% growth</span>
+                                    <h3>{stats?.coinsRedeemed ?? 0}</h3>
+                                    <p>Coins Redeemed</p>
+                                    <span className="stat-trend positive">Spent in the Eco Store</span>
                                 </div>
                             </div>
 
@@ -311,9 +350,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                                     <FaRecycle />
                                 </div>
                                 <div className="stat-content">
-                                    <h3>2.5K kg</h3>
+                                    <h3>{stats?.wasteRecycledKg ?? 0} kg</h3>
                                     <p>Waste Recycled</p>
-                                    <span className="stat-trend positive">+18% this month</span>
+                                    <span className="stat-trend positive">{stats?.completedPickups ?? 0} completed pickups</span>
                                 </div>
                             </div>
                         </div>
@@ -359,16 +398,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                             <div className="overview-section">
                                 <div className="section-header">
                                     <h3>Top Collectors</h3>
-                                    <span className="badge">{activeCollectors.length} active</span>
+                                    <span className="badge">{stats?.topCollectors.length ?? 0} active</span>
                                 </div>
-                                {activeCollectors.map(collector => (
+                                {stats && stats.topCollectors.length === 0 && (
+                                    <div className="empty-state-small">
+                                        <p>No completed pickups yet</p>
+                                    </div>
+                                )}
+                                {stats?.topCollectors.map(collector => (
                                     <div key={collector.id} className="collector-card">
                                         <div className="collector-avatar">
                                             {collector.name.charAt(0)}
                                         </div>
                                         <div className="collector-info">
                                             <h4>{collector.name}</h4>
-                                            <p>{collector.completedPickups} pickups • ⭐ {collector.rating}</p>
+                                            <p>{collector.completedPickups} completed pickups</p>
                                         </div>
                                     </div>
                                 ))}
@@ -414,11 +458,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab }) => {
                                     <div className="stat-label">Approved Collectors</div>
                                 </div>
                                 <div className="stat-item">
-                                    <div className="stat-number">{activeCollectors.length}</div>
+                                    <div className="stat-number">{stats?.approvedCollectors ?? 0}</div>
                                     <div className="stat-label">Active Collectors</div>
                                 </div>
                                 <div className="stat-item">
-                                    <div className="stat-number">1,240</div>
+                                    <div className="stat-number">{stats?.totalUsers ?? 0}</div>
                                     <div className="stat-label">Total Users</div>
                                 </div>
                             </div>

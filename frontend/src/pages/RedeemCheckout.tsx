@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { FaCoins, FaArrowLeft, FaMapMarkerAlt, FaTruck, FaCheck, FaShoppingCart } from 'react-icons/fa';
 import { useCart } from '../contexts/CartContext';
 import { useAuth } from '../contexts/AuthContext';
-import api from '../services/api';
+import api, { getErrorMessage } from '../services/api';
 import './RedeemCheckout.css';
 
 interface Product {
@@ -30,12 +30,13 @@ interface Address {
 const RedeemCheckout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const state = (location.state || {}) as any;
-  const product = state?.product as Product | undefined;
-  const cartItems = state?.cartItems as Array<{ id: string; name: string; price: number; image?: string; qty: number }> | undefined;
-  const cart = (() => {
-    try { return useCart(); } catch { return null; }
-  })();
+  const state = (location.state || {}) as {
+    product?: Product;
+    cartItems?: Array<{ id: string; name: string; price: number; image?: string; qty: number }>;
+  };
+  const product = state.product;
+  const cartItems = state.cartItems;
+  const cart = useCart();
   const { user: authUser, updateUser } = useAuth();
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -112,11 +113,11 @@ const RedeemCheckout: React.FC = () => {
 
   const validateAddress = () =>
     address.fullName.trim().length >= 2 &&
-    address.phone.trim().length >= 10 &&
+    /^\+?\d{10,13}$/.test(address.phone.replace(/[\s()-]/g, '')) &&
     address.address.trim().length >= 5 &&
     address.city.trim().length >= 2 &&
     address.state.trim().length >= 2 &&
-    address.pincode.trim().length >= 5;
+    /^\d{6}$/.test(address.pincode.trim());
 
   const handleNext = () => {
     if (currentStep === 1 && validateAddress()) {
@@ -141,6 +142,8 @@ const RedeemCheckout: React.FC = () => {
       });
 
       const orderId = res.data?.orderId || `GC-${Date.now().toString().slice(-8)}`;
+      // Show what the server actually charged (prices are set by the server, not the cart)
+      const chargedCoins = typeof res.data?.order?.totalCoins === 'number' ? res.data.order.totalCoins : totalCost;
 
       // Also persist to localStorage for client-side order history backup
       const orderData = {
@@ -149,7 +152,7 @@ const RedeemCheckout: React.FC = () => {
         items: cartItems,
         address,
         deliveryOption,
-        totalCost,
+        totalCost: chargedCoins,
         createdAt: new Date().toISOString(),
       };
       const existingOrders = JSON.parse(localStorage.getItem('redeem.orders') || '[]');
@@ -157,11 +160,7 @@ const RedeemCheckout: React.FC = () => {
       localStorage.setItem('redeem.orders', JSON.stringify(existingOrders));
 
       if (cartItems && cartItems.length > 0) {
-        try {
-          cart?.clearCart();
-        } catch (e) {
-          // ignore
-        }
+        cart.clearCart();
       }
 
       // Update user points in context
@@ -169,7 +168,7 @@ const RedeemCheckout: React.FC = () => {
         updateUser({ points: res.data.remainingCoins });
         setUserCoins(res.data.remainingCoins);
       } else {
-        const newBal = Math.max(0, userCoins - totalCost);
+        const newBal = Math.max(0, userCoins - chargedCoins);
         updateUser({ points: newBal });
         setUserCoins(newBal);
       }
@@ -178,13 +177,13 @@ const RedeemCheckout: React.FC = () => {
         state: {
           orderId,
           product: product || undefined,
-          totalCoins: totalCost,
+          totalCoins: chargedCoins,
         },
       });
 
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error placing order:', error);
-      alert(error.response?.data?.message || 'Failed to place order. Please try again.');
+      alert(getErrorMessage(error, 'Failed to place order. Please try again.'));
     } finally {
       setIsLoading(false);
     }
@@ -216,8 +215,8 @@ const RedeemCheckout: React.FC = () => {
       <h3>Delivery Address</h3>
       <div className="form-grid">
         <div className="form-group">
-          <label>Full Name *</label>
-          <input
+          <label htmlFor="checkout-full-name">Full Name *</label>
+          <input id="checkout-full-name"
             type="text"
             value={address.fullName}
             onChange={(e) => setAddress({ ...address, fullName: e.target.value })}
@@ -226,18 +225,18 @@ const RedeemCheckout: React.FC = () => {
           />
         </div>
         <div className="form-group">
-          <label>Phone Number *</label>
-          <input
+          <label htmlFor="checkout-phone-number">Phone Number *</label>
+          <input id="checkout-phone-number"
             type="tel"
             value={address.phone}
             onChange={(e) => setAddress({ ...address, phone: e.target.value })}
-            placeholder="Enter your phone number"
+            placeholder="10-digit phone number"
             required
           />
         </div>
         <div className="form-group full-width">
-          <label>Email</label>
-          <input
+          <label htmlFor="checkout-email">Email</label>
+          <input id="checkout-email"
             type="email"
             value={address.email}
             onChange={(e) => setAddress({ ...address, email: e.target.value })}
@@ -245,8 +244,8 @@ const RedeemCheckout: React.FC = () => {
           />
         </div>
         <div className="form-group full-width">
-          <label>Address *</label>
-          <textarea
+          <label htmlFor="checkout-address">Address *</label>
+          <textarea id="checkout-address"
             value={address.address}
             onChange={(e) => setAddress({ ...address, address: e.target.value })}
             placeholder="Enter your complete address"
@@ -255,8 +254,8 @@ const RedeemCheckout: React.FC = () => {
           />
         </div>
         <div className="form-group">
-          <label>City *</label>
-          <input
+          <label htmlFor="checkout-city">City *</label>
+          <input id="checkout-city"
             type="text"
             value={address.city}
             onChange={(e) => setAddress({ ...address, city: e.target.value })}
@@ -265,8 +264,8 @@ const RedeemCheckout: React.FC = () => {
           />
         </div>
         <div className="form-group">
-          <label>State *</label>
-          <input
+          <label htmlFor="checkout-state">State *</label>
+          <input id="checkout-state"
             type="text"
             value={address.state}
             onChange={(e) => setAddress({ ...address, state: e.target.value })}
@@ -275,18 +274,18 @@ const RedeemCheckout: React.FC = () => {
           />
         </div>
         <div className="form-group">
-          <label>Pincode *</label>
-          <input
+          <label htmlFor="checkout-pincode">Pincode *</label>
+          <input id="checkout-pincode"
             type="text"
             value={address.pincode}
             onChange={(e) => setAddress({ ...address, pincode: e.target.value })}
-            placeholder="Enter pincode"
+            placeholder="6-digit pincode"
             required
           />
         </div>
         <div className="form-group">
-          <label>Country</label>
-          <input
+          <label htmlFor="checkout-country">Country</label>
+          <input id="checkout-country"
             type="text"
             value={address.country}
             onChange={(e) => setAddress({ ...address, country: e.target.value })}

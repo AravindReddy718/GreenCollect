@@ -3,6 +3,11 @@ const http = require('http');
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 require('dotenv').config({ path: './.env' });
+const bcrypt = require('bcryptjs');
+const { spawnSync } = require('child_process');
+
+// Tests never use the real JWT secret or database
+process.env.JWT_SECRET = 'test-only-jwt-secret';
 
 const TEST_PORT = 4001;
 const BASE_URL = `http://localhost:${TEST_PORT}`;
@@ -43,23 +48,10 @@ const runAllTests = async () => {
     }
   };
 
-  let mongod = null;
-  let activeUri = process.env.MONGO_URI;
-  let usingAtlas = false;
-
-  // Step A: Test if MongoDB Atlas is reachable from current IP
-  console.log('--- Checking MongoDB Atlas Connection ---');
-  try {
-    await mongoose.connect(activeUri, { serverSelectionTimeoutMS: 4000 });
-    console.log(`✅ Connected directly to MongoDB Atlas cluster: ${mongoose.connection.name}`);
-    usingAtlas = true;
-    await mongoose.disconnect();
-  } catch (atlasErr) {
-    console.warn(`⚠️ MongoDB Atlas blocked by IP whitelist: ${atlasErr.message}`);
-    console.log('ℹ️ Spinning up isolated MongoDB Memory Server for test execution...');
-    mongod = await MongoMemoryServer.create();
-    activeUri = mongod.getUri();
-  }
+  // Always use an isolated in-memory MongoDB so tests never write to a real database
+  console.log('ℹ️ Starting isolated MongoDB Memory Server for test execution...');
+  const mongod = await MongoMemoryServer.create();
+  const activeUri = mongod.getUri();
 
   // Step B: Set MONGO_URI and PORT for backend test server
   process.env.MONGO_URI = activeUri;
@@ -130,6 +122,14 @@ const runAllTests = async () => {
 
     // Unique test identifiers
     const timestamp = Date.now();
+
+    // Admin accounts cannot self-register, so create one directly (as `npm run create-admin` does)
+    const User = require('./models/Users');
+    const adminCreds = { email: `admin_${timestamp}@example.com`, password: 'AdminPass123!' };
+    await User.create({ name: 'Test Admin', email: adminCreds.email, password: await bcrypt.hash(adminCreds.password, 10), role: 'admin' });
+    const adminLogin = await request('/api/auth/login', { method: 'POST', body: adminCreds });
+    const adminToken = adminLogin.data?.token;
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
     const testUser = {
       name: `Tester ${timestamp}`,
       email: `test_${timestamp}@example.com`,
@@ -241,9 +241,25 @@ const runAllTests = async () => {
     });
     assert(unapprovedLogin.status === 403, 'Unapproved collector login returns 403 Forbidden');
 
+    // [P0-2] Approving without a token is refused
+    const approveNoAuth = await request(`/api/users/approve-collector/${collectorId}`, {
+      method: 'PUT',
+      body: { isApproved: true }
+    });
+    assert(approveNoAuth.status === 401, '[P0-2] Approve collector without token returns 401', `got ${approveNoAuth.status}`);
+
+    // [P0-2] A normal user cannot approve collectors
+    const approveAsUser = await request(`/api/users/approve-collector/${collectorId}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${userToken}` },
+      body: { isApproved: true }
+    });
+    assert(approveAsUser.status === 403, '[P0-2] Approve collector as normal user returns 403', `got ${approveAsUser.status}`);
+
     // Admin approves collector
     const approveRes = await request(`/api/users/approve-collector/${collectorId}`, {
       method: 'PUT',
+      headers: adminHeaders,
       body: { isApproved: true }
     });
     assert(approveRes.status === 200, 'Collector approved successfully by admin');
@@ -337,14 +353,17 @@ const runAllTests = async () => {
     const productPayload = {
       productName: `Reusable Bamboo Cup ${timestamp}`,
       description: 'Zero-waste bamboo fibre travel mug',
-      price: 120,
+      price: 60,
       coinsRequired: 60,
       category: 'Lifestyle',
       stockQuantity: 25,
       productImage: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=500'
     };
 
-    const prodRes = await request('/api/products', { method: 'POST', body: productPayload });
+    const prodNoAuth = await request('/api/products', { method: 'POST', body: productPayload });
+    assert(prodNoAuth.status === 401, '[P0-2] Create product without token returns 401', `got ${prodNoAuth.status}`);
+
+    const prodRes = await request('/api/products', { method: 'POST', headers: adminHeaders, body: productPayload });
     assert(prodRes.status === 201, 'Product created successfully');
     const createdProductId = prodRes.data?.product?._id;
 
@@ -406,19 +425,285 @@ const runAllTests = async () => {
     assert(lbRes.status === 200, 'Leaderboard responds with 200');
     assert(Array.isArray(lbRes.data?.leaderboard), 'Leaderboard is array of users');
 
+    // ================= REGRESSION TESTS FOR QA FIXES =================
+    console.log('\n--- TEST 18: Regression tests for QA report fixes ---');
+    const authHeader = (t) => ({ Authorization: `Bearer ${t}` });
+
+    // [P0-2] Admin-only endpoints refuse anonymous and normal users
+    const coinsNoAuth = await request(`/api/users/${userId}/coins`, { method: 'PATCH', body: { coinsChange: 100000 } });
+    assert(coinsNoAuth.status === 401, '[P0-2] Change coins without token returns 401', `got ${coinsNoAuth.status}`);
+    const coinsAsUser = await request(`/api/users/${userId}/coins`, { method: 'PATCH', headers: authHeader(userToken), body: { coinsChange: 100000 } });
+    assert(coinsAsUser.status === 403, '[P0-2] Change coins as normal user returns 403', `got ${coinsAsUser.status}`);
+    const delNoAuth = await request(`/api/products/delete/${createdProductId}`, { method: 'DELETE' });
+    assert(delNoAuth.status === 401, '[P0-2] Delete product without token returns 401', `got ${delNoAuth.status}`);
+    const adminListNoAuth = await request('/api/admin/collector-requests');
+    assert(adminListNoAuth.status === 401, '[P0-2] Admin collector list without token returns 401', `got ${adminListNoAuth.status}`);
+    const partnerNoAuth = await request('/api/partners', { method: 'POST', body: { companyName: 'X', establishingYear: 2000, type: 'x', location: 'x', contact: 'x', wasteProcessed: 'x' } });
+    assert(partnerNoAuth.status === 401, '[P0-2] Create partner without token returns 401', `got ${partnerNoAuth.status}`);
+    const notifNoAuth = await request(`/api/notifications?userId=${userId}`);
+    assert(notifNoAuth.status === 401, '[P0-2] Read notifications without token returns 401', `got ${notifNoAuth.status}`);
+    const notifCreate = await request('/api/notifications', { method: 'POST', headers: adminHeaders, body: { userId, message: 'Hello from admin' } });
+    assert(notifCreate.status === 201, '[P0-2] Admin can create a notification', `got ${notifCreate.status}`);
+    const notifMine = await request('/api/notifications', { headers: authHeader(userToken) });
+    assert(notifMine.status === 200 && notifMine.data?.items?.some(n => n.message === 'Hello from admin'), '[P1-10] User reads own notifications via token', JSON.stringify(notifMine.data));
+    assert(notifMine.data?.items?.some(n => /accepted/.test(n.message)) && notifMine.data?.items?.some(n => /earned 60 coins/.test(n.message)), '[Re-audit P2-4] Accept and complete created notifications for the user', JSON.stringify(notifMine.data));
+    const notifOther = await request('/api/notifications', { headers: authHeader(collectorToken) });
+    assert(notifOther.status === 200 && notifOther.data?.items?.length === 0, '[P0-2] Another user cannot see those notifications', JSON.stringify(notifOther.data));
+
+    // [P0-3] Self-registration as admin is refused
+    const adminReg = await request('/api/auth/register', { method: 'POST', body: { name: 'Evil', email: `evil_${timestamp}@example.com`, password: 'Password123!', role: 'admin' } });
+    assert(adminReg.status === 400, '[P0-3] Register with role admin returns 400', `got ${adminReg.status}`);
+    assert((await db.collection('users').countDocuments({ email: `evil_${timestamp}@example.com` })) === 0, '[P0-3] No admin account was created');
+
+    // [P0-4] Client-sent prices are ignored; a negative price cannot mint coins
+    const pointsBeforeEvil = (await db.collection('users').findOne({ email: testUser.email })).points;
+    const evilOrder = await request('/api/orders', {
+      method: 'POST', headers: authHeader(userToken),
+      body: { ...orderPayload, items: [{ id: createdProductId, name: 'x', price: -100000, qty: 1 }] }
+    });
+    const pointsAfterEvil = (await db.collection('users').findOne({ email: testUser.email })).points;
+    assert(evilOrder.status === 400, '[P0-4] Negative-price order is refused (real price 60 > balance)', `got ${evilOrder.status} ${JSON.stringify(evilOrder.data)}`);
+    assert(pointsAfterEvil === pointsBeforeEvil, `[P0-4] Balance unchanged by negative-price order (${pointsBeforeEvil} -> ${pointsAfterEvil})`);
+    const negQty = await request('/api/orders', {
+      method: 'POST', headers: authHeader(userToken),
+      body: { ...orderPayload, items: [{ id: createdProductId, qty: -5 }] }
+    });
+    assert(negQty.status === 400, '[P0-4] Negative quantity is refused', `got ${negQty.status}`);
+    const fakeProduct = await request('/api/orders', {
+      method: 'POST', headers: authHeader(userToken),
+      body: { ...orderPayload, items: [{ id: 'not-a-product', price: 0, qty: 1 }] }
+    });
+    assert(fakeProduct.status === 400, '[P0-4] Order with an unknown product ID is refused', `got ${fakeProduct.status}`);
+
+    // [P0-4] Atomic deduction: two simultaneous orders cannot both spend the same coins
+    await db.collection('users').updateOne({ email: testUser.email }, { $set: { points: 60 } });
+    const raceItems = { ...orderPayload, items: [{ id: createdProductId, qty: 1 }] };
+    const [raceA, raceB] = await Promise.all([
+      request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: raceItems }),
+      request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: raceItems })
+    ]);
+    const raceOk = [raceA, raceB].filter(r => r.status === 201).length;
+    const pointsAfterRace = (await db.collection('users').findOne({ email: testUser.email })).points;
+    assert(raceOk === 1 && pointsAfterRace === 0, `[P0-4] Only one of two simultaneous orders succeeds (successes=${raceOk}, balance=${pointsAfterRace})`);
+
+    // [P0-5] Server refuses to start without JWT_SECRET
+    const envNoSecret = { ...process.env };
+    delete envNoSecret.JWT_SECRET;
+    const noSecret = spawnSync(process.execPath, ['-e', "require('./middleware/auth')"], { cwd: __dirname, env: envNoSecret, encoding: 'utf8' });
+    assert(noSecret.status !== 0 && /JWT_SECRET must be set/.test(noSecret.stderr), '[P0-5] Loading auth without JWT_SECRET fails loudly', noSecret.stderr);
+
+    // [P1-1] A user cannot read another user's order
+    const user2 = { name: 'Second User', email: `second_${timestamp}@example.com`, password: 'Password123!', role: 'user' };
+    const user2Reg = await request('/api/auth/register', { method: 'POST', body: user2 });
+    const user2Token = user2Reg.data?.token;
+    const otherOrder = await request(`/api/orders/${orderRes.data.orderId}`, { headers: authHeader(user2Token) });
+    assert(otherOrder.status === 404, "[P1-1] Reading another user's order returns 404", `got ${otherOrder.status}`);
+    const ownOrder = await request(`/api/orders/${orderRes.data.orderId}`, { headers: authHeader(userToken) });
+    assert(ownOrder.status === 200, '[P1-1] Owner can still read their order', `got ${ownOrder.status}`);
+
+    // [P1-2] Leaderboard does not expose emails
+    const lb2 = await request('/api/users/leaderboard');
+    assert(lb2.data.leaderboard.length > 0 && lb2.data.leaderboard.every(u => u.email === undefined), '[P1-2] Leaderboard entries have no email field');
+
+    // [P1-4] Server-side validation returns 400, not 500
+    const reg = (body) => request('/api/auth/register', { method: 'POST', body: { name: 'Valid Name', password: 'Password123!', role: 'user', ...body } });
+    const shortPw = await reg({ email: `pw_${timestamp}@example.com`, password: '1' });
+    assert(shortPw.status === 400, '[P1-4] Password "1" is refused with 400', `got ${shortPw.status}`);
+    const blankName = await reg({ email: `nm_${timestamp}@example.com`, name: '   ' });
+    assert(blankName.status === 400, '[P1-4] Whitespace-only name returns 400 (was 500)', `got ${blankName.status}`);
+    const longName = await reg({ email: `ln_${timestamp}@example.com`, name: 'x'.repeat(60) });
+    assert(longName.status === 400, '[P1-4] 60-character name returns 400 (was 500)', `got ${longName.status}`);
+    const badPhone = await reg({ email: `ph_${timestamp}@example.com`, phone: 'abc' });
+    assert(badPhone.status === 400, '[P1-4] Invalid phone returns 400 (was 500)', `got ${badPhone.status}`);
+    const objEmail = await request('/api/auth/login', { method: 'POST', body: { email: { $ne: null }, password: 'x' } });
+    assert(objEmail.status === 400, '[P1-4] Login with an object as email returns 400', `got ${objEmail.status}`);
+    const pickup = (overrides) => request('/api/waste-requests', { method: 'POST', headers: authHeader(userToken), body: { ...pickupPayload, ...overrides } });
+    const badDate = await pickup({ pickupDate: 'garbage' });
+    assert(badDate.status === 400, '[P1-4] Pickup date "garbage" returns 400 (was 500)', `got ${badDate.status}`);
+    const pastDate = await pickup({ pickupDate: '1990-01-01' });
+    assert(pastDate.status === 400, '[P1-4] Past pickup date returns 400 (was accepted)', `got ${pastDate.status}`);
+    const longAddr = await pickup({ pickupAddress: 'x'.repeat(10000) });
+    assert(longAddr.status === 400, '[P1-4] 10,000-character address returns 400 (was accepted)', `got ${longAddr.status}`);
+    const orgBadDate = await request('/api/waste-requests/organisation', { method: 'POST', body: { ...orgPayload, pickupDate: 'garbage' } });
+    assert(orgBadDate.status === 400, '[P1-4] Organisation request with bad date returns 400', `got ${orgBadDate.status}`);
+
+    // [P1-5] Valid emails are accepted, invalid ones refused, and ReDoS inputs return instantly
+    for (const email of [`first+tag_${timestamp}@gmail.com`, `x_${timestamp}@college.info`, `y_${timestamp}@x.technology`]) {
+      const r = await reg({ email });
+      assert(r.status === 201, `[P1-5] Valid email ${email} is accepted`, `got ${r.status} ${JSON.stringify(r.data)}`);
+    }
+    for (const email of ['a@b', '_@_.__', 'a@b.c1']) {
+      const r = await reg({ email });
+      assert(r.status === 400, `[P1-5] Invalid email ${email} is refused with 400`, `got ${r.status}`);
+    }
+    const redosStart = Date.now();
+    const redos = await reg({ email: 'a'.repeat(40) + '!' });
+    const redosMs = Date.now() - redosStart;
+    assert(redos.status === 400 && redosMs < 1000, `[P1-5] 41-character ReDoS email answered in ${redosMs} ms with 400`);
+    const redos2Start = Date.now();
+    const redos2 = await reg({ email: 'a'.repeat(40) + `+${timestamp}@example.com` });
+    const redos2Ms = Date.now() - redos2Start;
+    assert(redos2.status === 201 && redos2Ms < 1000, `[P1-5] Email that froze the old schema regex now saves in ${redos2Ms} ms (status ${redos2.status})`);
+
+    // [P1-7] Admin accept assigns an approved collector, who can then see and start the request
+    const orgId = orgReqInDb._id.toString();
+    const acceptNoCollector = await request(`/api/admin/organisation-requests/${orgId}/accept`, { method: 'POST', headers: adminHeaders, body: {} });
+    assert(acceptNoCollector.status === 400, '[P1-7] Accept without a collector returns 400', `got ${acceptNoCollector.status}`);
+    const acceptOrg = await request(`/api/admin/organisation-requests/${orgId}/accept`, { method: 'POST', headers: adminHeaders, body: { collectorId } });
+    assert(acceptOrg.status === 200, '[P1-7] Accept with an approved collector returns 200', `got ${acceptOrg.status} ${JSON.stringify(acceptOrg.data)}`);
+    const collectorList = await request('/api/waste-requests', { headers: authHeader(collectorToken) });
+    assert(Array.isArray(collectorList.data) && collectorList.data.some(r => r._id === orgId), '[P1-7] Assigned collector sees the accepted organisation request');
+    const startOrg = await request(`/api/waste-requests/${orgId}/start`, { method: 'PUT', headers: authHeader(collectorToken) });
+    assert(startOrg.status === 200, '[P1-7] Assigned collector can start the organisation pickup', `got ${startOrg.status}`);
+
+    // [P1-8] A rejected collector stays rejected after a refresh
+    const rejCollector = { name: 'Rejected Collector', email: `rej_${timestamp}@example.com`, password: 'Password123!', role: 'collector', collectorInfo: { ...testCollector.collectorInfo, vehicleNumberPlate: `KA02RJ${timestamp.toString().slice(-4)}` } };
+    const rejReg = await request('/api/auth/register', { method: 'POST', body: rejCollector });
+    await request(`/api/users/approve-collector/${rejReg.data?.collectorId}`, { method: 'PUT', headers: adminHeaders, body: { isApproved: false } });
+    const collectorsAfter = await request('/api/admin/collector-requests', { headers: adminHeaders });
+    const rejEntry = collectorsAfter.data.find(c => c._id === rejReg.data?.collectorId);
+    assert(rejEntry?.collectorInfo?.status === 'rejected', '[P1-8] Rejected collector is reported as rejected, not pending', JSON.stringify(rejEntry?.collectorInfo));
+
+    // [P1-9] Product active toggle persists (the endpoint the admin UI now calls)
+    const toggle = await request(`/api/products/status/${createdProductId}`, { method: 'PATCH', headers: adminHeaders, body: { isActive: false } });
+    const prodAfter = await db.collection('products').findOne({ _id: new mongoose.Types.ObjectId(createdProductId) });
+    assert(toggle.status === 200 && prodAfter.isActive === false, '[P1-9] Deactivating a product is saved in the database');
+
+    // ================= RE-AUDIT REGRESSION TESTS =================
+    console.log('\n--- TEST 19: Regression tests for re-audit fixes ---');
+    const tomorrowDate = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    const newPickup = async (overrides = {}) => (await request('/api/waste-requests', { method: 'POST', headers: authHeader(userToken), body: { ...pickupPayload, pickupDate: tomorrowDate, ...overrides } })).data?.request?.id;
+    const makeCollector = async (tag) => {
+      const reg = await request('/api/auth/register', { method: 'POST', body: { name: `Collector ${tag}`, email: `${tag}_${timestamp}@example.com`, password: 'Password123!', role: 'collector', collectorInfo: { ...testCollector.collectorInfo, vehicleNumberPlate: `KA09${tag.slice(0, 2).toUpperCase()}${timestamp.toString().slice(-4)}` } } });
+      await request(`/api/users/approve-collector/${reg.data.collectorId}`, { method: 'PUT', headers: adminHeaders, body: { isApproved: true } });
+      const login = await request('/api/auth/login', { method: 'POST', body: { email: `${tag}_${timestamp}@example.com`, password: 'Password123!' } });
+      return { id: reg.data.collectorId, token: login.data.token, email: `${tag}_${timestamp}@example.com` };
+    };
+    const c2 = await makeCollector('ctwo');
+    const c3 = await makeCollector('cthree');
+
+    // [Re-audit P1-1] A revoked collector's existing token stops working immediately
+    const revokeTarget = await newPickup();
+    await request(`/api/users/approve-collector/${c3.id}`, { method: 'PUT', headers: adminHeaders, body: { isApproved: false } });
+    const revokedAccept = await request(`/api/waste-requests/${revokeTarget}/accept`, { method: 'PUT', headers: authHeader(c3.token) });
+    assert(revokedAccept.status === 401, '[Re-audit P1-1] Revoked collector with old token gets 401', `got ${revokedAccept.status}`);
+
+    // [Re-audit P1-6] Login does not reveal collector accounts without the right password
+    const revokedWrongPw = await request('/api/auth/login', { method: 'POST', body: { email: c3.email, password: 'wrong-password' } });
+    assert(revokedWrongPw.status === 401, '[Re-audit P1-6] Revoked collector + wrong password returns 401, not 403', `got ${revokedWrongPw.status}`);
+    const revokedRightPw = await request('/api/auth/login', { method: 'POST', body: { email: c3.email, password: 'Password123!' } });
+    assert(revokedRightPw.status === 403 && /rejected/.test(revokedRightPw.data?.error), '[Re-audit P1-6] Rejected collector with right password is told they were rejected', JSON.stringify(revokedRightPw.data));
+
+    // [Re-audit P1-2] Absurd weights are refused
+    const hugeWeight = await request('/api/waste-requests', { method: 'POST', headers: authHeader(userToken), body: { ...pickupPayload, estimatedWeight: 1000000 } });
+    assert(hugeWeight.status === 400, '[Re-audit P1-2] Pickup of 1,000,000 kg returns 400', `got ${hugeWeight.status}`);
+
+    // [Re-audit P1-3] Simultaneous "complete" calls pay out exactly once
+    const raceId = await newPickup();
+    await request(`/api/waste-requests/${raceId}/accept`, { method: 'PUT', headers: authHeader(c2.token) });
+    await request(`/api/waste-requests/${raceId}/start`, { method: 'PUT', headers: authHeader(c2.token) });
+    const coinsBeforeRace = (await db.collection('users').findOne({ email: testUser.email })).points;
+    const completes = await Promise.all([1, 2, 3].map(() => request(`/api/waste-requests/${raceId}/complete`, { method: 'PUT', headers: authHeader(c2.token) })));
+    const coinsAfterRace = (await db.collection('users').findOne({ email: testUser.email })).points;
+    const okCompletes = completes.filter(r => r.status === 200).length;
+    const completeActivities = await db.collection('collectoractivities').countDocuments({ wasteRequestId: new mongoose.Types.ObjectId(raceId), status: 'completed' });
+    assert(okCompletes === 1 && coinsAfterRace - coinsBeforeRace === 60 && completeActivities === 1, `[Re-audit P1-3] 3 simultaneous completes: ${okCompletes} success, +${coinsAfterRace - coinsBeforeRace} coins, ${completeActivities} activity record`);
+
+    // [Re-audit P1-4] Reject works (200) and only hides the request from that collector
+    const rejectId = await newPickup();
+    const rejectRes = await request(`/api/waste-requests/${rejectId}/reject`, { method: 'PUT', headers: authHeader(c2.token) });
+    assert(rejectRes.status === 200, '[Re-audit P1-4] Collector reject returns 200 (was 500)', `got ${rejectRes.status} ${JSON.stringify(rejectRes.data).slice(0, 120)}`);
+    const rejectedDoc = await db.collection('wasterequests').findOne({ _id: new mongoose.Types.ObjectId(rejectId) });
+    assert(rejectedDoc.collectorStatus === 'pending', '[Re-audit P1-4] Request stays pending for other collectors', rejectedDoc.collectorStatus);
+    const c2List = await request('/api/waste-requests', { headers: authHeader(c2.token) });
+    const c1List = await request('/api/waste-requests', { headers: authHeader(collectorToken) });
+    assert(!c2List.data.some(r => r._id === rejectId) && c1List.data.some(r => r._id === rejectId), '[Re-audit P1-4] Hidden from the rejecting collector, visible to others');
+
+    // [Re-audit P1-5] ?status= cannot show another collector's requests
+    const c1Accepted = await request('/api/waste-requests?status=completed', { headers: authHeader(collectorToken) });
+    assert(!c1Accepted.data.some(r => r._id === raceId), "[Re-audit P1-5] Collector 1 cannot list collector 2's completed request via ?status=");
+
+    // [Re-audit P1-7] Bad input returns 4xx with a readable message, never 500
+    const expect4xx = (label, res, expected, id = 'P1-7') => assert(
+      res.status >= 400 && res.status < 500 && !/Cast to|validation failed|Cannot read/.test(JSON.stringify(res.data)) && (!expected || expected.test(JSON.stringify(res.data))),
+      `[Re-audit ${id}] ${label} -> ${res.status} ${JSON.stringify(res.data).slice(0, 90)}`);
+    // An active, in-stock product so order tests reach the address checks
+    const addrProd = await request('/api/products', { method: 'POST', headers: adminHeaders, body: { ...productPayload, productName: `Addr ${timestamp}`, stockQuantity: 50 } });
+    const addrItems = [{ id: addrProd.data.product._id, qty: 1 }];
+    expect4xx('Pickup wasteType "gold"', await request('/api/waste-requests', { method: 'POST', headers: authHeader(userToken), body: { ...pickupPayload, wasteType: 'gold' } }));
+    expect4xx('Organisation type "army"', await request('/api/waste-requests/organisation', { method: 'POST', body: { ...orgPayload, organisationType: 'army' } }));
+    expect4xx('Product price -10', await request('/api/products', { method: 'POST', headers: adminHeaders, body: { ...productPayload, productName: `Neg ${timestamp}`, price: -10 } }));
+    expect4xx('Product without name', await request('/api/products', { method: 'POST', headers: adminHeaders, body: { ...productPayload, productName: undefined } }));
+    expect4xx('Order with object as fullName', await request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: { ...orderPayload, items: addrItems, address: { ...orderPayload.address, fullName: { a: 1 } } } }), /address fields must be provided/);
+    expect4xx('Accept with bad ID "abc"', await request('/api/waste-requests/abc/accept', { method: 'PUT', headers: authHeader(collectorToken) }));
+    expect4xx('Approve collector with bad ID "abc"', await request('/api/users/approve-collector/abc', { method: 'PUT', headers: adminHeaders, body: { isApproved: true } }));
+    expect4xx('Delete product with bad ID "abc"', await request('/api/products/delete/abc', { method: 'DELETE', headers: adminHeaders }));
+    expect4xx('Partner with bad ID "abc"', await request('/api/partners/abc'));
+    expect4xx('Admin coins change "abc"', await request(`/api/users/${userId}/coins`, { method: 'PATCH', headers: adminHeaders, body: { coinsChange: 'abc' } }));
+    const twinEmail = `twin_${timestamp}@example.com`;
+    const twins = await Promise.all([1, 2].map(() => request('/api/auth/register', { method: 'POST', body: { name: 'Twin', email: twinEmail, password: 'Password123!', role: 'user' } })));
+    const twinStatuses = twins.map(t => t.status).sort().join(',');
+    assert(twinStatuses === '201,409', `[Re-audit P1-7] Double-click signup gives 201 + 409 (got ${twinStatuses})`);
+
+    // [Re-audit P1-8] Remaining bad data is refused
+    expect4xx('Organisation weight -50', await request('/api/waste-requests/organisation', { method: 'POST', body: { ...orgPayload, estimatedWeight: -50 } }), null, 'P1-8');
+    expect4xx('Pickup time "lol"', await request('/api/waste-requests', { method: 'POST', headers: authHeader(userToken), body: { ...pickupPayload, pickupTime: 'lol' } }), null, 'P1-8');
+    expect4xx('Pickup date 9999-12-31', await request('/api/waste-requests', { method: 'POST', headers: authHeader(userToken), body: { ...pickupPayload, pickupDate: '9999-12-31' } }), null, 'P1-8');
+    expect4xx('Order phone "1"', await request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: { ...orderPayload, items: addrItems, address: { ...orderPayload.address, phone: '1' } } }), /valid phone/, 'P1-8');
+    expect4xx('Order pincode "1"', await request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: { ...orderPayload, items: addrItems, address: { ...orderPayload.address, pincode: '1' } } }), /6-digit pincode/, 'P1-8');
+    expect4xx('Order 10,000-character address', await request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: { ...orderPayload, items: addrItems, address: { ...orderPayload.address, address: 'x'.repeat(10000) } } }), /too long/, 'P1-8');
+    expect4xx('Avatar of 50,000 characters', await request('/api/auth/profile', { method: 'PUT', headers: authHeader(userToken), body: { avatar: 'x'.repeat(50000) } }), null, 'P1-8');
+    expect4xx('Avatar "javascript:alert(1)"', await request('/api/auth/profile', { method: 'PUT', headers: authHeader(userToken), body: { avatar: 'javascript:alert(1)' } }), null, 'P1-8');
+
+    // [Re-audit P1-10] Out-of-stock and deactivated products cannot be ordered; stock goes down after an order
+    await db.collection('users').updateOne({ email: testUser.email }, { $set: { points: 1000 } });
+    const stockProd = await request('/api/products', { method: 'POST', headers: adminHeaders, body: { ...productPayload, productName: `Stock ${timestamp}`, stockQuantity: 2 } });
+    const stockId = stockProd.data.product._id;
+    const order2 = await request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: { ...orderPayload, items: [{ id: stockId, qty: 2 }] } });
+    const stockLeft = (await db.collection('products').findOne({ _id: new mongoose.Types.ObjectId(stockId) })).stockQuantity;
+    assert(order2.status === 201 && stockLeft === 0, `[Re-audit P1-10] Ordering 2 of 2 succeeds and stock drops to ${stockLeft}`);
+    const soldOut = await request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: { ...orderPayload, items: [{ id: stockId, qty: 1 }] } });
+    assert(soldOut.status === 400 && /out of stock/.test(soldOut.data?.message), '[Re-audit P1-10] Ordering an out-of-stock product returns 400', `got ${soldOut.status}`);
+    const inactiveOrder = await request('/api/orders', { method: 'POST', headers: authHeader(userToken), body: { ...orderPayload, items: [{ id: createdProductId, qty: 1 }] } });
+    assert(inactiveOrder.status === 400 && /no longer available/.test(inactiveOrder.data?.message), '[Re-audit P1-10] Ordering a deactivated product returns 400', `got ${inactiveOrder.status}`);
+
+    // [Re-audit P2-5] Admins see every request, including accepted organisation requests
+    const adminAll = await request('/api/waste-requests', { headers: adminHeaders });
+    assert(adminAll.data.some(r => r._id === orgReqInDb._id.toString() && r.status === 'in-progress'), '[Re-audit P2-5] Admin list still shows the accepted organisation request');
+
+    // [Re-audit P2-6] A collector only sees a user's requests that are assigned to them
+    const c2View = await request(`/api/waste-requests/user/${userId}`, { headers: authHeader(c2.token) });
+    assert(c2View.status === 200 && c2View.data.requests.length > 0 && c2View.data.requests.every(r => r.assignedCollector?._id === c2.id), `[Re-audit P2-6] Collector 2 sees only their ${c2View.data.requests.length} assigned request(s) for this user`);
+
+    // [Re-audit P2-7] Repeated wrong passwords get rate limited
+    const limitEmail = `limit_${timestamp}@example.com`;
+    await request('/api/auth/register', { method: 'POST', body: { name: 'Limit Test', email: limitEmail, password: 'Password123!', role: 'user' } });
+    const wrongTries = [];
+    for (let i = 0; i < 11; i++) wrongTries.push((await request('/api/auth/login', { method: 'POST', body: { email: limitEmail, password: 'nope' } })).status);
+    assert(wrongTries.slice(0, 10).every(st => st === 401) && wrongTries[10] === 429, `[Re-audit P2-7] 10 wrong passwords -> 401, 11th -> ${wrongTries[10]}`);
+
+    // [Re-audit P2-10] create-admin refuses to run with default credentials
+    const noArgsAdmin = spawnSync(process.execPath, ['createAdmin.js'], { cwd: __dirname, env: { ...process.env, MONGO_URI: activeUri }, encoding: 'utf8' });
+    assert(noArgsAdmin.status === 1 && /Usage/.test(noArgsAdmin.stderr), '[Re-audit P2-10] create-admin without arguments prints usage and exits');
+
+    // Admin overview numbers come from the database, not hardcoded values
+    const statsAsUser = await request('/api/admin/stats', { headers: authHeader(userToken) });
+    assert(statsAsUser.status === 403, '[Real stats] Normal user cannot read admin stats', `got ${statsAsUser.status}`);
+    const adminStats = await request('/api/admin/stats', { headers: adminHeaders });
+    const realUsers = await db.collection('users').countDocuments({ role: 'user' });
+    const realCompleted = await db.collection('wasterequests').countDocuments({ collectorStatus: 'completed' });
+    assert(adminStats.status === 200 && adminStats.data.stats.totalUsers === realUsers && adminStats.data.stats.completedPickups === realCompleted,
+      `[Real stats] Admin stats match the database (users ${adminStats.data?.stats?.totalUsers}/${realUsers}, completed ${adminStats.data?.stats?.completedPickups}/${realCompleted})`);
+
     console.log('\n====================================================');
     console.log(`🏁 TEST SUMMARY: ${passed} PASSED, ${failed} FAILED`);
-    if (usingAtlas) {
-      console.log('🌐 Tests executed against live MongoDB Atlas cluster');
-    } else {
-      console.log('ℹ️ Tests executed against isolated MongoDB Engine (Atlas IP whitelist required for production cluster)');
-    }
+    console.log('ℹ️ Tests executed against isolated in-memory MongoDB');
     console.log('====================================================\n');
 
   } finally {
     server.close();
     await mongoose.disconnect();
-    if (mongod) await mongod.stop();
+    await mongod.stop();
   }
 
   process.exit(failed > 0 ? 1 : 0);

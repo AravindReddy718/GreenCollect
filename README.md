@@ -93,62 +93,92 @@ Janatha Garage provides a digital platform where:
 
 ---
 
+## 📸 Screenshots
+
+| Home | User dashboard |
+|---|---|
+| ![Home page](docs/screenshots/home.png) | ![User dashboard](docs/screenshots/user-dashboard.png) |
+| **Eco Store** | **Collector dashboard** |
+| ![Eco rewards store](docs/screenshots/store.png) | ![Collector dashboard](docs/screenshots/collector-dashboard.png) |
+| **Admin dashboard** | |
+| ![Admin dashboard](docs/screenshots/admin-dashboard.png) | |
+
+---
+
 ## ⚙️ Setup Instructions
 
-Follow these steps to set up and run the **frontend** locally.  
-> 🖥️ The backend is already deployed and connected.
+You need **Node.js 20.19+ (or 22.12+)**, **npm**, and a **MongoDB** database (a free MongoDB Atlas cluster or a local `mongodb://localhost:27017`).
 
----
+### 1️⃣ Clone the repository
 
-### 🪜 1️⃣ Clone the Repository
 ```bash
-git clone https://github.com/PeyalaAnandanaidu/GreenCollect.git
+git clone https://github.com/AravindReddy718/GreenCollect.git
 cd GreenCollect
+```
 
-### 🪜 2️⃣ Install Dependencies
+### 2️⃣ Backend
 
-Move into the frontend folder and install the required packages.
+```bash
+cd backend
+npm install
+cp .env.example .env
+```
 
+Edit `backend/.env`:
+
+| Variable | Required | Description |
+|---|---|---|
+| `MONGO_URI` | Yes | MongoDB connection string |
+| `JWT_SECRET` | Yes | Long random string used to sign login tokens. The server will not start without it. |
+| `JWT_EXPIRES_IN` | No | Token lifetime, default `7d` |
+| `PORT` | No | Default `4000` |
+| `FRONTEND_URL` | No | Extra allowed CORS origin |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Only for product image uploads | Cloudinary account keys |
+
+Create an admin and load the demo data, then start the server:
+
+```bash
+npm run create-admin -- admin@demo.com DemoAdmin@123 "Demo Admin"
+npm run seed
+npm run dev
+```
+
+Check it is running: open http://localhost:4000/api/health
+
+### 3️⃣ Frontend
+
+In a second terminal:
+
+```bash
 cd frontend
 npm install
-
-### 🪜 3️⃣ Run the Application
-
-Start the frontend development server with:
-
+cp .env.example .env      # VITE_API_URL=http://localhost:4000
 npm run dev
+```
 
-Once it compiles successfully, open the link shown in the terminal (usually):
+Open http://localhost:5173
 
-http://localhost:5173
+### 4️⃣ Demo accounts
 
-### 🪜 🌍 4️⃣ Access the Application
+| Role | Email | Password |
+|---|---|---|
+| Admin | admin@demo.com | DemoAdmin@123 |
+| User | user@demo.com | DemoUser@123 |
+| Collector | collector@demo.com | DemoCollector@123 |
 
-After starting the frontend:
+The demo user starts with 500 coins, there are 6 products in the store, and one pending pickup request for the collector to accept.
 
-- The app will connect automatically to the **deployed backend**.
-- You can now use all the key features of **Janatha Garage**, including:
+### 5️⃣ Run the backend tests
 
-  - 🧍 **User registration & login**
-  - 🧾 **Waste pickup booking**
-  - 🪙 **Reward tracking**
-  - 🛠️ **Admin & collector management**
+```bash
+cd backend
+npm test
+```
 
-Once the app starts successfully, open it in your browser at:
+The tests use a temporary in-memory MongoDB, so they never touch your real database.
 
+### 🧠 Troubleshooting
 
-> 💡 Make sure your internet connection is active so the frontend can communicate with the deployed backend API.
-
-
----
-
-✅ **Preview (how it will look on GitHub):**
-
----
-
-### 🪜 🧠 5️⃣ Troubleshooting
-
-- ⚠️ **Port already in use:**  
-  If you see this error, stop the current process by pressing **Ctrl + C** in the terminal, then rerun the command:
-  ```bash
-  npm run dev
+- **"JWT_SECRET must be set"**: add `JWT_SECRET` to `backend/.env`.
+- **"Cannot connect to server" on login**: the backend is not running, or `VITE_API_URL` in `frontend/.env` points to the wrong address.
+- **Port already in use**: stop the other process with **Ctrl + C**, then run `npm run dev` again.
